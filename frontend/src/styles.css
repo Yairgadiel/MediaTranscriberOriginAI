@@ -1,0 +1,13 @@
+:root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #dce6ef; background: #0b1220; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+main { min-height: 100vh; display: grid; place-items: center; padding: 2rem 1rem; background: radial-gradient(circle at top right, #173e55, transparent 42%), #0b1220; }
+.panel { width: min(100%, 48rem); padding: clamp(1.5rem, 5vw, 3.5rem); border: 1px solid #315068; border-radius: 1rem; background: #101c2d; box-shadow: 0 1.5rem 5rem #0008; }
+.eyebrow { margin: 0; color: #69d2c0; font-size: .78rem; font-weight: 700; letter-spacing: .12em; }
+h1 { margin: .35rem 0 .75rem; font-size: clamp(2rem, 6vw, 3.25rem); } h2 { margin: 0; font-size: 1.1rem; }
+.intro { color: #aebeca; line-height: 1.55; } form { display: grid; gap: .6rem; margin-top: 2rem; }
+input { max-width: 100%; padding: .7rem; color: #dce6ef; border: 1px dashed #57758c; border-radius: .5rem; } .file { margin: 0; color: #aebeca; overflow-wrap: anywhere; }
+button { width: fit-content; padding: .7rem 1rem; border: 0; border-radius: .45rem; background: #69d2c0; color: #07131b; font: inherit; font-weight: 700; cursor: pointer; } button:disabled { opacity: .55; cursor: not-allowed; }
+.status, .error, .result { margin-top: 1.5rem; padding: 1rem; border-radius: .5rem; } .status { background: #19344a; } .status.failed, .error { background: #4a2029; color: #ffd8dc; } .status.completed { background: #163e38; }
+.text-button { margin: .7rem .7rem 0 0; padding: 0; background: transparent; color: #9be7db; text-decoration: underline; } .result { background: #0b1524; } .result > div { display: flex; justify-content: space-between; gap: 1rem; align-items: baseline; } .result span { color: #aebeca; font-size: .85rem; }
+pre { max-height: 24rem; overflow: auto; white-space: pre-wrap; font: inherit; line-height: 1.55; } .result button + button { margin-left: .6rem; }
