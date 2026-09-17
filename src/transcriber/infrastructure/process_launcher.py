@@ -2,10 +2,13 @@
 import ctypes
 import os
 import signal
+import resource
 import sys
 
 if __name__ == '__main__':
     expected_parent = int(sys.argv[1])
+    if sys.argv[2] == 'ffprobe':
+        resource.setrlimit(resource.RLIMIT_FSIZE, (65536, 65536))
     if sys.platform == 'linux':
         libc = ctypes.CDLL(None, use_errno=True)
         if libc.prctl(1, signal.SIGKILL) != 0:

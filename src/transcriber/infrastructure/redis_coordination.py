@@ -1,4 +1,5 @@
 import time
+import threading
 
 class RedisAdmissionControl:
     def __init__(self, client, settings):
@@ -29,3 +30,27 @@ class RedisAdmissionControl:
 
     def expired(self):
         return self.client.zrangebyscore('admission:leases', '-inf', time.time())
+
+
+class RedisWorkerHeartbeat:
+    """One worker child; expiring readiness survives neither crashes nor outages."""
+    def __init__(self, client, ttl=20):
+        self.client, self.ttl = client, ttl
+        self.current_job = None
+        self.stop = threading.Event()
+
+    def ready(self):
+        return bool(self.client.exists('worker:ready'))
+
+    def job_alive(self, job_id):
+        return bool(self.client.exists('worker:job:' + job_id))
+
+    def run(self):
+        while not self.stop.is_set():
+            try:
+                self.client.set('worker:ready', '1', ex=self.ttl)
+                if self.current_job:
+                    self.client.set('worker:job:' + self.current_job, '1', ex=self.ttl)
+            except Exception:
+                pass  # Keys expire; admission fails closed.
+            self.stop.wait(3)

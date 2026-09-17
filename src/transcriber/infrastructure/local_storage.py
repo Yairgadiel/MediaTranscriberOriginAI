@@ -1,8 +1,7 @@
 import re
 import shutil
-import time
 from pathlib import Path
-from transcriber.domain.models.transcription_job import JobError
+from transcriber.domain.job import JobError
 
 ID = re.compile(r"^[a-f0-9]{32}$")
 

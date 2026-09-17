@@ -3,8 +3,9 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import wave
-from transcriber.domain.models.transcription_job import JobError
+from transcriber.domain.job import JobError
 
 class FFmpegMediaProcessor:
     def __init__(self, settings):
@@ -12,22 +13,27 @@ class FFmpegMediaProcessor:
 
     def _run(self, args, timeout):
         # A fresh launcher sets Linux parent-death protection before exec.
-        command = [sys.executable, '-m', 'transcriber.infrastructure.media.process_launcher', str(os.getpid()), *args]
-        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                              start_new_session=True) as process:
+        command = [sys.executable, '-m', 'transcriber.infrastructure.process_launcher', str(os.getpid()), *args]
+        # Probe selects one stream; launcher also caps stdout file size at 64 KiB.
+        with tempfile.TemporaryFile() as output, subprocess.Popen(
+            command, stdout=output, stderr=subprocess.DEVNULL, start_new_session=True
+        ) as process:
             try:
-                out, _ = process.communicate(timeout=timeout)
+                process.wait(timeout=timeout)
             except BaseException:
-                os.killpg(process.pid, signal.SIGKILL)
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
                 raise
             if process.returncode:
                 raise JobError('invalid_media', 'The media could not be decoded. Use a supported audio or video file.')
-            return out
+            output.seek(0)
+            return output.read(65536)
 
     def normalize(self, source, destination):
         try:
             raw = self._run(['ffprobe', '-v', 'error', '-protocol_whitelist', 'file',
+                             '-select_streams', 'a:0',
                              '-show_entries', 'format=format_name:stream=codec_type,codec_name',
                              '-of', 'json', str(source)], min(30, self.settings.decode_timeout))
             probe = json.loads(raw)
@@ -46,7 +52,7 @@ class FFmpegMediaProcessor:
             with wave.open(str(destination)) as wav:
                 duration = wav.getnframes() / wav.getframerate()
             if duration > self.settings.max_duration_seconds:
-                raise JobError('media_too_long', 'The recording exceeds the one-hour limit.')
+                raise JobError('media_too_long', 'The recording exceeds the configured duration limit.')
             if duration <= 0:
                 raise JobError('empty_audio', 'The audio track contains no samples.')
             return duration

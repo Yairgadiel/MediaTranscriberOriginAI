@@ -1,7 +1,7 @@
 import json
 import time
 from redis import Redis
-from transcriber.domain.models.transcription_job import Job
+from transcriber.domain.job import Job
 
 TRANSITION = """
 local raw = redis.call('GET', KEYS[1])

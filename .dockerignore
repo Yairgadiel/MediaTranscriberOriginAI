@@ -14,3 +14,5 @@ models
 *.mp4
 *.webm
 *.m4a
+docs/implementation-status.md
+transcription-assignment-plan.md

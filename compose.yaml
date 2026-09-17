@@ -1,0 +1,46 @@
+services:
+  redis:
+    image: redis:7.4.5-bookworm
+    command: [redis-server, --save, "", --appendonly, "no", --maxmemory, 256mb, --maxmemory-policy, noeviction]
+    mem_limit: 384m
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  api:
+    build: .
+    image: media-transcriber:local
+    ports: ["127.0.0.1:8000:8000"]
+    environment: &settings
+      TRANSCRIBER_REDIS_URL: redis://redis:6379/0
+      TRANSCRIBER_MAX_UPLOAD_BYTES: ${TRANSCRIBER_MAX_UPLOAD_BYTES:-4294967296}
+      TRANSCRIBER_PROCESSING_TIMEOUT: ${TRANSCRIBER_PROCESSING_TIMEOUT:-7200}
+      TRANSCRIBER_CLEANUP_GRACE: ${TRANSCRIBER_CLEANUP_GRACE:-60}
+    volumes: [work:/work]
+    mem_limit: 512m
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=8)"]
+      interval: 10s
+      timeout: 9s
+      retries: 3
+      start_period: 120s
+    stop_grace_period: 30s
+  worker:
+    image: media-transcriber:local
+    build: .
+    command: [celery, -A, transcriber.entrypoints.worker:celery_app, worker, --loglevel=INFO, --pool=prefork, --concurrency=1]
+    environment: *settings
+    volumes: [work:/work, model-cache:/models]
+    cpus: 4
+    mem_limit: 6g
+    stop_grace_period: 30s
+    depends_on:
+      redis:
+        condition: service_healthy
+volumes:
+  work:
+  model-cache:
