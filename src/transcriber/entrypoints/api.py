@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from redis.exceptions import RedisError
 from starlette.concurrency import run_in_threadpool
@@ -171,6 +172,10 @@ def create_app(container=None):
                     await run_in_threadpool(service.abandon, job_id)
                 service.uploading.discard(job_id)
 
+    # Docker copies the compiled React application here. API routes are registered
+    # first so the catch-all static mount cannot shadow them during development.
+    app.mount('/', StaticFiles(directory='src/transcriber/entrypoints/static', html=True,
+                               check_dir=False), name='web')
     return app
 
 

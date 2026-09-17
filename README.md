@@ -1,6 +1,6 @@
 # Media Transcriber
 
-An asynchronous, CPU-only English transcription service. Upload one audio or video file to receive a short-lived transcript. The API is public under `/api`; the in-progress Docker image is intended to serve the compiled browser UI from the same FastAPI process.
+An asynchronous, CPU-only English transcription service. Upload one audio or video file to receive a short-lived transcript. The API is public under `/api`; the Docker image serves the compiled browser UI from the same FastAPI process.
 
 ## Quick start
 
@@ -10,11 +10,11 @@ Docker Desktop or another Compose-compatible Docker engine is required. Allocate
 docker compose up --build
 ```
 
-Open <http://localhost:8000>. The worker downloads the public model to the `model-cache` volume on first use, so the first transcription takes longer. The service binds only to localhost and Redis is not published. A fresh final Compose build/startup smoke check is still pending; see [Known limitations](#known-limitations-and-future-work).
+Open <http://localhost:8000>. The worker downloads the public model to the `model-cache` volume on first use, so the first transcription takes longer. The service binds only to localhost and Redis is not published.
 
 Copy `.env.example` to `.env` only to override limits. The supported Compose flow needs no host Python, Node, FFmpeg, GPU, Hugging Face token, or media download.
 
-The optional frontend development server is configured to proxy `/api` to a backend at `127.0.0.1:8000`. Its dependency installation, typecheck, build, and tests remain unverified while the frontend work is reviewed.
+The optional frontend development server is configured to proxy `/api` to a backend at `127.0.0.1:8000`.
 
 ## Use the API
 
@@ -27,7 +27,7 @@ curl http://localhost:8000/api/transcriptions/JOB_ID
 
 `POST /api/transcriptions` returns `202` with status `queued`. Poll `GET /api/transcriptions/{id}` until `completed` (with `text` and `duration_seconds`) or `failed` (with a safe error). An unknown or expired ID returns `404`; capacity returns `429`; an unavailable worker or state store returns `503`. `GET /health` is ready only when Redis, temporary storage, and a model-ready worker are available.
 
-The in-progress React/TypeScript UI is designed to prevent duplicate uploads, retain a nonterminal job ID in browser localStorage, distinguish a temporary polling error from a failed transcription, explain a `404` as expiration/restart, and offer copy and text download after completion. Those browser behaviors have not yet been verified.
+The React/TypeScript UI prevents duplicate uploads, retains a nonterminal job ID in browser localStorage, distinguishes a temporary polling error from a failed transcription, explains a `404` as expiration/restart, and offers copy and text download after completion. It does not display elapsed waiting time.
 
 ## Limits and configuration
 
@@ -76,10 +76,10 @@ Redis persistence is explicitly disabled. Pending jobs and results can be lost o
 
 ## Verification
 
-Local backend verification used Python 3.11.15 provisioned by `uv`: locked imports for FastAPI, Celery, Redis, PyAV, faster-whisper, and the API entrypoint passed; the focused suite passed **17 tests** against a temporary no-persistence local Redis 8.10.1 instance and host FFmpeg (one upstream AnyIO deprecation warning). The frontend typecheck/build/tests and the final Docker checkpoint have not been run.
+Local backend verification used Python 3.11.15 provisioned by `uv`: locked imports for FastAPI, Celery, Redis, PyAV, faster-whisper, and the API entrypoint passed; the focused suite passed **17 tests** against a temporary no-persistence local Redis 8.10.1 instance and host FFmpeg (one upstream AnyIO deprecation warning). The frontend TypeScript check, production build, and three focused UI tests passed. The final Docker Compose checkpoint built the current lockfiles, reached ready health, and completed the supplied five-minute MP3 through `queued → processing → completed`; its temporary work directory was absent afterward.
 
 ## Known limitations and future work
 
-One-hour input support has **not** been verified with a user-provided one-hour recording. Intel/AMD64 behavior, accuracy/WER, silence/video/additional-format behavior beyond focused checks, native subprocess interruption, and worker memory/recycling under repeated jobs are unverified. The English base model, VAD, and disabled previous-text conditioning do not guarantee accurate or hallucination-free output. The Docker image's new frontend build path also awaits its first build/startup check.
+One-hour input support has **not** been verified with a user-provided one-hour recording. Intel/AMD64 behavior, accuracy/WER, silence/video/additional-format behavior beyond focused checks, native subprocess interruption, and worker memory/recycling under repeated jobs are unverified. The UI has no elapsed-wait display. The English base model, VAD, and disabled previous-text conditioning do not guarantee accurate or hallucination-free output.
 
 The planned production phase adds PostgreSQL migrations, durable media, leases/retries/idempotent completion, recovery, and a transactional outbox. Authentication, cloud deployment, scaling, diarization, alignment, streaming, translation, and editing are intentionally out of scope.

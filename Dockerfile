@@ -1,3 +1,10 @@
+FROM node:22.15.0-bookworm-slim AS frontend-build
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend ./
+RUN npm run build
+
 FROM python:3.11.13-slim-bookworm
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/app/src \
     TMPDIR=/work OMP_NUM_THREADS=4
@@ -10,5 +17,6 @@ RUN useradd --uid 10001 --create-home app && mkdir /work /models \
     && chown app:app /work /models
 COPY src src
 COPY tests tests
+COPY --from=frontend-build /frontend/dist src/transcriber/entrypoints/static
 USER app
 CMD ["uvicorn", "transcriber.entrypoints.api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
