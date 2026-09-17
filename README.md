@@ -73,10 +73,21 @@ Application services depend on four replaceable contracts: `JobRepository`, `Med
 
 The repository pattern is used explicitly: the current `RedisJobRepository` implements `JobRepository` and stores temporary job records in Redis. The current flow is:
 
-```text
-upload → reserve capacity → temporary file → Redis job → Celery job ID
-      → atomic claim → bounded FFmpeg decode/WAV → faster-whisper
-      → result record → cleanup
+```mermaid
+flowchart LR
+    Browser[Browser UI] -->|multipart upload| API[FastAPI API]
+    API -->|reserve capacity| Admission[Redis admission]
+    API -->|store temporary media| Storage[Shared work volume]
+    API -->|create job record| Repo[RedisJobRepository]
+    API -->|publish opaque job ID| Queue[Celery / Redis]
+    Queue --> Worker[Celery worker]
+    Worker -->|atomic claim| Repo
+    Worker -->|read media| Storage
+    Worker --> FFmpeg[Bounded FFmpeg decode]
+    FFmpeg --> Engine[faster-whisper / CPU INT8]
+    Engine -->|write result| Repo
+    Worker -->|cleanup media| Storage
+    Browser -->|poll status/result| API
 ```
 
 Only an opaque job ID crosses the local Celery boundary; media bytes remain in the shared Docker `work` volume. Replacing an adapter does not automatically provide identical capabilities, durability, delivery guarantees, migration behavior, or recovery semantics. Those properties belong to the chosen implementation and its operational design.
