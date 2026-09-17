@@ -1,0 +1,10 @@
+.git
+.venv
+.env
+**/__pycache__
+**/node_modules
+**/dist
+benchmarks/local
+work
+models
+.cache
