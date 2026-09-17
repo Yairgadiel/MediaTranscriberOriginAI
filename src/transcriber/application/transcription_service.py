@@ -1,8 +1,7 @@
 import logging
 import time
-from typing import BinaryIO
+from typing import TYPE_CHECKING, BinaryIO
 
-from transcriber.config import Settings
 from transcriber.domain.job import Job, JobError
 from transcriber.domain.ports import (
     AdmissionControl, MediaProcessor, MediaStorage, TaskDispatcher,
@@ -10,13 +9,16 @@ from transcriber.domain.ports import (
 )
 from transcriber.domain.repositories.job_repository import JobRepository
 
+if TYPE_CHECKING:
+    from transcriber.config import Settings
+
 log = logging.getLogger(__name__)
 
 
 class TranscriptionService:
     def __init__(self, repository: JobRepository, storage: MediaStorage,
                  dispatcher: TaskDispatcher, admission: AdmissionControl,
-                 heartbeat: WorkerHeartbeat, settings: Settings):
+                 heartbeat: WorkerHeartbeat, settings: "Settings"):
         self.repository, self.storage, self.dispatcher = repository, storage, dispatcher
         self.admission, self.heartbeat, self.settings = admission, heartbeat, settings
         self.uploading: set[str] = set()  # Single API process; protects active copies.
