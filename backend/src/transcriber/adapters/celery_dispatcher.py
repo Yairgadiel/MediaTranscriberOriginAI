@@ -1,5 +1,6 @@
 from celery import Celery
 from transcriber.config import Settings
+from transcriber.domain.contracts import TaskDispatcher
 s = Settings()
 celery_app = Celery('transcriber', broker=s.redis_url, include=['transcriber.entrypoints.worker'])
 celery_app.conf.update(task_ignore_result=True, result_backend=None, task_serializer='json',
@@ -12,6 +13,6 @@ celery_app.conf.update(task_ignore_result=True, result_backend=None, task_serial
     worker_hijack_root_logger=False)
 
 
-class CeleryTaskDispatcher:
+class CeleryTaskDispatcher(TaskDispatcher):
     def dispatch(self, job_id: str) -> None:
         celery_app.send_task('transcriber.process', args=[job_id], task_id=job_id)

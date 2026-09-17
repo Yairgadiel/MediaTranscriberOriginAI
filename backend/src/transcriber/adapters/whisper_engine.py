@@ -1,4 +1,7 @@
-class FasterWhisperEngine:
+from transcriber.domain.contracts import TranscriptionEngine
+
+
+class FasterWhisperEngine(TranscriptionEngine):
     def __init__(self, settings):
         # ML imports happen only when constructing the worker adapter.
         from faster_whisper import WhisperModel

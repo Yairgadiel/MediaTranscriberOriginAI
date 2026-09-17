@@ -15,28 +15,25 @@ backend/
 │   └── transcriber/
 │       ├── __init__.py
 │       ├── config.py               # environment-backed application settings
-│       ├── bootstrap.py            # concrete dependency composition
+│       ├── dependencies.py         # concrete dependency composition
 │       ├── domain/
-│       │   ├── __init__.py
-│       │   ├── job.py              # job entity, statuses, and domain errors
-│       │   └── ports.py            # storage, engine, and dispatcher contracts
-│       ├── application/
-│       │   ├── __init__.py
-│       │   └── transcription_service.py  # submit, retrieve, process, cleanup use cases
-│       ├── infrastructure/
-│       │   ├── __init__.py
+│       │   ├── models/job.py        # Pydantic job model, statuses, and domain errors
+│       │   ├── contracts.py         # explicit storage, engine, dispatcher, and Redis-client interfaces
+│       │   └── repositories/job_repository.py # JobRepository interface
+│       ├── services/
+│       │   └── transcription_service.py  # named submission, retrieval, processing, cleanup use cases
+│       ├── adapters/
 │       │   ├── celery_dispatcher.py      # Celery task publication
+│       │   ├── redis_client.py            # Redis admission and heartbeat adapters
+│       │   ├── redis_job_repository.py    # Redis JobRepository implementation
 │       │   ├── ffmpeg_processor.py       # media probing and WAV normalization
 │       │   ├── local_storage.py           # shared temporary-file storage
 │       │   ├── process_launcher.py        # bounded subprocess execution
-│       │   ├── redis_coordination.py     # admission and worker-heartbeat coordination
-│       │   ├── whisper_engine.py          # faster-whisper CPU adapter
-│       │   └── repositories/
-│       │       ├── __init__.py
-│       │       └── redis_job_repository.py # Redis JobRepository implementation
+│       │   └── whisper_engine.py          # faster-whisper CPU adapter
 │       └── entrypoints/
 │           ├── __init__.py
-│           ├── api.py               # FastAPI HTTP app and public routes
+│           ├── api.py               # FastAPI HTTP app, Depends wiring, and public routes
+│           ├── schemas.py           # Pydantic HTTP response schemas
 │           └── worker.py            # Celery worker app and task entrypoint
 └── tests/
     ├── conftest.py                 # Redis-backed test fixtures
@@ -46,9 +43,21 @@ backend/
         └── test_transcription_service.py # dependency-free service behavior tests
 ```
 
-The dependency direction is `entrypoints → application → domain`; infrastructure implements
-the domain contracts and is assembled by `bootstrap.py`. API routes and Celery tasks do not own
-Redis or persistence logic.
+The dependency direction is `entrypoints → services → domain`; adapters explicitly implement
+the domain interfaces and `dependencies.py` declares the concrete factories. `ports` was renamed
+to `contracts`: these are simply interfaces describing what the service needs. FastAPI resolves
+the graph as `settings → Redis client → repository/storage/dispatcher/admission/heartbeat →
+TranscriptionService` through `Depends`. Routes do not construct or locate dependencies.
+
+`JobRepository` is defined in `domain/repositories/job_repository.py`; its current dedicated
+implementation is `adapters/redis_job_repository.py`. Redis is not a service
+requirement: it is the selected implementation for temporary job records, admission leases, and
+worker heartbeats. Celery also currently uses Redis as its broker. A different implementation can
+replace those injected contracts without changing the transcription service.
+
+`entrypoints/worker.py` is intentionally small: it is the Celery process entrypoint. It creates
+the worker service after forking, loads FFmpeg/faster-whisper outside the API process, reports
+model readiness, and passes each opaque job ID to `transcribe_queued_job`.
 
 From the repository root, run the focused backend tests with:
 

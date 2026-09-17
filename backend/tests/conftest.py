@@ -5,11 +5,11 @@ from types import SimpleNamespace
 import pytest
 from redis import Redis
 
-from transcriber.application.transcription_service import TranscriptionService
+from transcriber.services.transcription_service import TranscriptionService
 from transcriber.config import Settings
-from transcriber.infrastructure.local_storage import LocalMediaStorage
-from transcriber.infrastructure.redis_coordination import RedisAdmissionControl, RedisWorkerHeartbeat
-from transcriber.infrastructure.repositories.redis_job_repository import RedisJobRepository
+from transcriber.adapters.local_storage import LocalMediaStorage
+from transcriber.adapters.redis_client import RedisAdmissionControl, RedisWorkerHeartbeat
+from transcriber.adapters.redis_job_repository import RedisJobRepository
 
 
 @pytest.fixture
@@ -36,4 +36,5 @@ def context(client, tmp_path):
     dispatcher = SimpleNamespace(dispatch=dispatched.append)
     service = TranscriptionService(repository, storage, dispatcher, admission, heartbeat, settings)
     return SimpleNamespace(settings=settings, redis=client, repository=repository, storage=storage,
-                           admission=admission, heartbeat=heartbeat, service=service, dispatched=dispatched)
+                           dispatcher=dispatcher, admission=admission, heartbeat=heartbeat,
+                           uploading=service.uploading, service=service, dispatched=dispatched)

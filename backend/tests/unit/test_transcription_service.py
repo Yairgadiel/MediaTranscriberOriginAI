@@ -2,8 +2,8 @@ import io
 import unittest
 from types import SimpleNamespace
 
-from transcriber.application.transcription_service import TranscriptionService
-from transcriber.domain.job import Job
+from transcriber.services.transcription_service import TranscriptionService
+from transcriber.domain.models.job import Job
 
 
 class FakeRepository:
@@ -97,8 +97,8 @@ class TranscriptionServiceTest(unittest.TestCase):
         )
 
     def submit(self, job_id='job'):
-        self.service.reserve(job_id)
-        job = self.service.submit(job_id, io.BytesIO(b'audio'))
+        self.service.reserve_upload_capacity(job_id)
+        job = self.service.store_and_enqueue(job_id, io.BytesIO(b'audio'))
         self.service.uploading.discard(job_id)
         return job
 
@@ -107,8 +107,8 @@ class TranscriptionServiceTest(unittest.TestCase):
         engine = SimpleNamespace(transcribe=lambda audio: (_ for _ in ()).throw(RuntimeError('private detail')))
         processor = SimpleNamespace(normalize=lambda source, destination: 1.0)
 
-        self.service.process(job.id, processor, engine)
-        self.service.process(job.id, processor, engine)
+        self.service.transcribe_queued_job(job.id, processor, engine)
+        self.service.transcribe_queued_job(job.id, processor, engine)
 
         result = self.repository.get(job.id)
         self.assertEqual(result.status, 'failed')
@@ -120,11 +120,11 @@ class TranscriptionServiceTest(unittest.TestCase):
 
     def test_publication_failure_marks_queued_job_failed_and_compensates(self):
         self.dispatcher.dispatch = lambda job_id: (_ for _ in ()).throw(RuntimeError('broker down'))
-        self.service.reserve('job')
+        self.service.reserve_upload_capacity('job')
 
         with self.assertRaisesRegex(RuntimeError, 'broker down'):
-            self.service.submit('job', io.BytesIO(b'audio'))
-        self.service.abandon('job')
+            self.service.store_and_enqueue('job', io.BytesIO(b'audio'))
+        self.service.compensate_failed_submission('job')
 
         result = self.repository.get('job')
         self.assertEqual(result.status, 'failed')
@@ -142,7 +142,7 @@ class TranscriptionServiceTest(unittest.TestCase):
             job_alive=lambda job_id: job_id == live.id,
         )
 
-        self.service.reconcile()
+        self.service.reconcile_expired_work()
 
         result = self.repository.get(stale.id)
         self.assertEqual(result.status, 'failed')
@@ -159,7 +159,7 @@ class TranscriptionServiceTest(unittest.TestCase):
         self.assertIn(live.id, self.admission.reserved)
 
         calls = []
-        self.service.process(
+        self.service.transcribe_queued_job(
             stale.id,
             SimpleNamespace(normalize=lambda source, destination: 1.0),
             SimpleNamespace(transcribe=lambda audio: calls.append(audio)),

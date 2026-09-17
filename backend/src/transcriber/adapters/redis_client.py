@@ -1,13 +1,12 @@
 import time
 import threading
 from uuid import uuid4
-
-class RedisAdmissionControl:
-    def __init__(self, client, settings):
+from transcriber.domain.contracts import AdmissionControl, RedisClient, WorkerHeartbeat
+class RedisAdmissionControl(AdmissionControl):
+    def __init__(self, client: RedisClient, settings):
         self.client, self.settings = client, settings
 
     def reserve(self, job_id, free_bytes):
-        # Expired reservations remain charged until maintenance has cleaned files.
         script = """
         if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3]) then return 0 end
         local used = 0
@@ -33,9 +32,9 @@ class RedisAdmissionControl:
         return self.client.zrangebyscore('admission:leases', '-inf', time.time())
 
 
-class RedisWorkerHeartbeat:
-    """One worker child; expiring readiness survives neither crashes nor outages."""
-    def __init__(self, client, ttl=20):
+class RedisWorkerHeartbeat(WorkerHeartbeat):
+    """Redis implementation of worker readiness and current-job tracking."""
+    def __init__(self, client: RedisClient, ttl=20):
         self.client, self.ttl = client, ttl
         self.token = uuid4().hex
         self.current_job = None
@@ -49,18 +48,14 @@ class RedisWorkerHeartbeat:
         return bool(self.client.exists('worker:job:' + job_id))
 
     def mark_not_ready(self):
-        """A replacement child must not inherit readiness from its predecessor."""
         self.client.delete('worker:ready')
 
     def shutdown(self):
         self.stop.set()
         if self._thread:
             self._thread.join(timeout=4)
-        # Do not remove readiness that a newly loaded replacement has published.
         self.client.eval("""
-        if redis.call('GET', KEYS[1]) == ARGV[1] then
-            redis.call('DEL', KEYS[1])
-        end
+        if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('DEL', KEYS[1]) end
         return 1
         """, 1, 'worker:ready', self.token)
 
@@ -77,5 +72,5 @@ class RedisWorkerHeartbeat:
                 if self.current_job:
                     self.client.set('worker:job:' + self.current_job, '1', ex=self.ttl)
             except Exception:
-                pass  # Keys expire; admission fails closed.
+                pass
             self.stop.wait(3)

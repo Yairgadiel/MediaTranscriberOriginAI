@@ -1,5 +1,5 @@
 from typing import Protocol
-from transcriber.domain.job import Job
+from transcriber.domain.models.job import Job
 
 class JobRepository(Protocol):
     """Nonterminal records do not expire. Terminal TTL begins at completion.

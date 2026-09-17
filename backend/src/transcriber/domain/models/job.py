@@ -1,6 +1,7 @@
-from dataclasses import dataclass, asdict
 from enum import StrEnum
 import time
+
+from pydantic import BaseModel, ConfigDict
 
 class Status(StrEnum):
     QUEUED = "queued"
@@ -8,8 +9,10 @@ class Status(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
 
-@dataclass
-class Job:
+class Job(BaseModel):
+    """The application-owned record for a transcription request."""
+
+    model_config = ConfigDict(frozen=False)
     id: str
     status: str = Status.QUEUED
     stage: str | None = None
@@ -25,8 +28,8 @@ class Job:
     def new(cls, job_id: str):
         return cls(id=job_id, created_at=time.time())
 
-    def as_dict(self):
-        return asdict(self)
+    def as_dict(self) -> dict:
+        return self.model_dump(mode='json')
 
 class JobError(Exception):
     def __init__(self, code: str, message: str):

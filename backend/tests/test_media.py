@@ -4,8 +4,8 @@ import wave
 import pytest
 
 from transcriber.config import Settings
-from transcriber.domain.job import JobError
-from transcriber.infrastructure.ffmpeg_processor import FFmpegMediaProcessor
+from transcriber.domain.models.job import JobError
+from transcriber.adapters.ffmpeg_processor import FFmpegMediaProcessor
 
 
 def pcm(path, seconds):

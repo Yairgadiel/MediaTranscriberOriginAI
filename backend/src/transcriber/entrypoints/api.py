@@ -3,53 +3,37 @@ import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 from redis.exceptions import RedisError
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
 
-from transcriber.bootstrap import Container
-from transcriber.domain.job import Job, JobError
+from transcriber.dependencies import create_transcription_service, get_transcription_service
+from transcriber.domain.models.job import JobError
 
 log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).with_name('static')
 
 
-class JobResponse(BaseModel):
-    id: str
-    status: str
-    stage: str | None
-    created_at: datetime
-    started_at: datetime | None
-    finished_at: datetime | None
-    expires_at: datetime | None
-    duration_seconds: float | None
-    text: str | None
-    error: dict[str, str] | None
-    status_url: str
-
-    @classmethod
-    def from_job(cls, job: Job):
-        return cls(**job.as_dict(), status_url=f'/api/transcriptions/{job.id}')
+from transcriber.entrypoints.schemas import JobResponse
 
 
-def create_app(container=None):
+def create_app(service=None):
     @asynccontextmanager
     async def lifespan(app):
-        app.state.container = container or Container()
+        runtime_service = service or create_transcription_service()
+        app.state.service = runtime_service
 
         async def maintain():
             while True:
                 try:
-                    await run_in_threadpool(app.state.container.service.reconcile)
+                    await run_in_threadpool(runtime_service.reconcile_expired_work)
                 except Exception:
                     log.warning('event=maintenance_unavailable')
                 await asyncio.sleep(5)
@@ -63,10 +47,12 @@ def create_app(container=None):
                 await task
             except asyncio.CancelledError:
                 pass
-            if container is None:
-                app.state.container.redis.close()
+            if service is None:
+                runtime_service.repository.client.close()
 
     app = FastAPI(title='Media transcription', lifespan=lifespan)
+    if service is not None:  # Explicit test seam; production uses the providers above.
+        app.dependency_overrides[get_transcription_service] = lambda: service
 
     @app.exception_handler(RedisError)
     async def unavailable(request, exc):
@@ -74,34 +60,34 @@ def create_app(container=None):
 
     @app.get('/health')
     async def health(request: Request):
-        c = request.app.state.container
         def check():
             try:
-                return c.redis.ping() and c.storage.healthy() and c.heartbeat.ready()
+                service = request.app.state.service
+                return (service.repository.client.ping() and service.storage.healthy()
+                        and service.heartbeat.ready())
             except Exception:
                 return False
         healthy = await run_in_threadpool(check)
         return JSONResponse({'status': 'ready' if healthy else 'unavailable'}, status_code=200 if healthy else 503)
 
     @app.get('/api/transcriptions/{job_id}', response_model=JobResponse)
-    async def get_job(job_id: str, request: Request):
+    async def get_job(job_id: str, service = Depends(get_transcription_service)):
         if len(job_id) != 32 or any(ch not in '0123456789abcdef' for ch in job_id):
             raise HTTPException(404, 'Unknown or expired job.')
-        job = await run_in_threadpool(request.app.state.container.service.get, job_id)
+        job = await run_in_threadpool(service.find_job, job_id)
         if job is None:
             raise HTTPException(404, 'Unknown or expired job.')
         return JobResponse.from_job(job)
 
     @app.post('/api/transcriptions', status_code=202, response_model=JobResponse)
-    async def upload(request: Request):
-        c = request.app.state.container
-        service, s = c.service, c.settings
+    async def upload(request: Request, service = Depends(get_transcription_service)):
+        s = service.settings
         job_id, accepted, reserved = uuid4().hex, False, False
         failure_status = 400
         form = parser = None
         try:
             # Admission happens before reading any body or creating parser spools.
-            await run_in_threadpool(service.reserve, job_id)
+            await run_in_threadpool(service.reserve_upload_capacity, job_id)
             reserved = True
             if not request.headers.get('content-type', '').lower().startswith('multipart/form-data'):
                 raise HTTPException(400, 'Send one multipart file field named file.')
@@ -148,7 +134,7 @@ def create_app(container=None):
             # byte limit. Starlette may not know a part's size on every parser path.
             if file.size is not None and file.size > s.max_upload_bytes:
                 raise HTTPException(413, 'The file exceeds the size limit.')
-            job = await run_in_threadpool(service.submit, job_id, file.file)
+            job = await run_in_threadpool(service.store_and_enqueue, job_id, file.file)
             accepted = True
             return JobResponse.from_job(job)
         except MultiPartException as exc:
@@ -173,7 +159,7 @@ def create_app(container=None):
                     spool.close()
             if reserved:
                 if not accepted:
-                    await run_in_threadpool(service.abandon, job_id)
+                    await run_in_threadpool(service.compensate_failed_submission, job_id)
                 service.uploading.discard(job_id)
 
     # Docker copies the compiled React application here. API routes are registered

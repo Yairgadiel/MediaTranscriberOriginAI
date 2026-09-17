@@ -1,11 +1,12 @@
 import re
 import shutil
 from pathlib import Path
-from transcriber.domain.job import JobError
+from transcriber.domain.models.job import JobError
+from transcriber.domain.contracts import MediaStorage
 
 ID = re.compile(r"^[a-f0-9]{32}$")
 
-class LocalMediaStorage:
+class LocalMediaStorage(MediaStorage):
     def __init__(self, root: Path):
         self.root = root
         root.mkdir(parents=True, exist_ok=True)

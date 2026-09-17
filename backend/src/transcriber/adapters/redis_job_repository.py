@@ -1,7 +1,10 @@
+"""Redis implementation of the domain JobRepository contract."""
 import json
 import time
-from redis import Redis
-from transcriber.domain.job import Job
+
+from transcriber.domain.contracts import RedisClient
+from transcriber.domain.models.job import Job
+from transcriber.domain.repositories.job_repository import JobRepository
 
 TRANSITION = """
 local raw = redis.call('GET', KEYS[1])
@@ -18,8 +21,9 @@ end
 return 1
 """
 
-class RedisJobRepository:
-    def __init__(self, client: Redis, ttl: int = 86400):
+
+class RedisJobRepository(JobRepository):
+    def __init__(self, client: RedisClient, ttl: int = 86400):
         self.client, self.ttl = client, ttl
         self.transition = client.register_script(TRANSITION)
 
@@ -31,7 +35,7 @@ class RedisJobRepository:
         return 1
         """
         if not self.client.eval(script, 2, 'job:' + job.id, 'jobs:active', json.dumps(job.as_dict()), job.id):
-            raise ValueError("Job already exists")
+            raise ValueError('Job already exists')
 
     def get(self, job_id):
         raw = self.client.get('job:' + job_id)

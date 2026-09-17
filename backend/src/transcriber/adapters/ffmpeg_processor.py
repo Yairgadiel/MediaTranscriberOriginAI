@@ -5,15 +5,24 @@ import subprocess
 import sys
 import tempfile
 import wave
-from transcriber.domain.job import JobError
+from transcriber.domain.models.job import JobError
+from transcriber.domain.contracts import MediaProcessor
 
-class FFmpegMediaProcessor:
+SUPPORTED_CONTAINERS = frozenset({'wav', 'mp3', 'mov', 'mp4', 'm4a', 'matroska', 'webm'})
+SUPPORTED_AUDIO_CODECS = frozenset({'pcm_s16le', 'pcm_s24le', 'pcm_s32le', 'pcm_f32le', 'mp3', 'aac', 'opus', 'vorbis'})
+# Informational only: HTTP MIME headers are untrusted; ffprobe container/codec checks enforce support.
+SUPPORTED_MEDIA_MIME_TYPES = frozenset({
+    'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/mp4', 'audio/webm',
+    'video/mp4', 'video/webm', 'video/x-matroska',
+})
+
+class FFmpegMediaProcessor(MediaProcessor):
     def __init__(self, settings):
         self.settings = settings
 
     def _run(self, args, timeout):
         # A fresh launcher sets Linux parent-death protection before exec.
-        command = [sys.executable, '-m', 'transcriber.infrastructure.process_launcher', str(os.getpid()), *args]
+        command = [sys.executable, '-m', 'transcriber.adapters.process_launcher', str(os.getpid()), *args]
         # Probe selects one stream; launcher also caps stdout file size at 64 KiB.
         with tempfile.TemporaryFile() as output, subprocess.Popen(
             command, stdout=output, stderr=subprocess.DEVNULL, start_new_session=True
@@ -38,12 +47,12 @@ class FFmpegMediaProcessor:
                              '-of', 'json', str(source)], min(30, self.settings.decode_timeout))
             probe = json.loads(raw)
             containers = set(probe.get('format', {}).get('format_name', '').split(','))
-            if not containers & {'wav', 'mp3', 'mov', 'mp4', 'm4a', 'matroska', 'webm'}:
+            if not containers & SUPPORTED_CONTAINERS:
                 raise JobError('unsupported_media', 'Use WAV, MP3, M4A, MP4, or WebM media.')
             audio = [s for s in probe.get('streams', []) if s.get('codec_type') == 'audio']
             if not audio:
                 raise JobError('no_audio', 'The video has no audio track.')
-            if audio[0].get('codec_name') not in {'pcm_s16le', 'pcm_s24le', 'pcm_s32le', 'pcm_f32le', 'mp3', 'aac', 'opus', 'vorbis'}:
+            if audio[0].get('codec_name') not in SUPPORTED_AUDIO_CODECS:
                 raise JobError('unsupported_codec', 'The first audio track uses an unsupported codec.')
             self._run(['ffmpeg', '-nostdin', '-v', 'error', '-xerror', '-protocol_whitelist', 'file',
                        '-threads', '1', '-i', str(source), '-map', '0:a:0', '-vn', '-sn', '-dn',

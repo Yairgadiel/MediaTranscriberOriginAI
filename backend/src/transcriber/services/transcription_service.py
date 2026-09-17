@@ -2,8 +2,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, BinaryIO
 
-from transcriber.domain.job import Job, JobError
-from transcriber.domain.ports import (
+from transcriber.domain.models.job import Job, JobError
+from transcriber.domain.contracts import (
     AdmissionControl, MediaProcessor, MediaStorage, TaskDispatcher,
     TranscriptionEngine, WorkerHeartbeat,
 )
@@ -18,24 +18,25 @@ log = logging.getLogger(__name__)
 class TranscriptionService:
     def __init__(self, repository: JobRepository, storage: MediaStorage,
                  dispatcher: TaskDispatcher, admission: AdmissionControl,
-                 heartbeat: WorkerHeartbeat, settings: "Settings"):
+                 heartbeat: WorkerHeartbeat, settings: "Settings",
+                 uploading: set[str] | None = None):
         self.repository, self.storage, self.dispatcher = repository, storage, dispatcher
         self.admission, self.heartbeat, self.settings = admission, heartbeat, settings
-        self.uploading: set[str] = set()  # Single API process; protects active copies.
+        self.uploading = uploading if uploading is not None else set()  # Single API process; protects active copies.
 
-    def reserve(self, job_id: str) -> None:
+    def reserve_upload_capacity(self, job_id: str) -> None:
         if not self.heartbeat.ready():
             raise JobError('unavailable', 'The worker is not ready. Please try again shortly.')
         if not self.admission.reserve(job_id, self.storage.free_bytes()):
             raise JobError('capacity', 'Upload capacity is full. Please try again later.')
         self.uploading.add(job_id)
 
-    def cleanup(self, job_id: str) -> None:
+    def cleanup_job_resources(self, job_id: str) -> None:
         # Keep capacity charged if deleting files fails; maintenance retries.
         self.storage.delete(job_id)
         self.admission.release(job_id)
 
-    def abandon(self, job_id: str) -> None:
+    def compensate_failed_submission(self, job_id: str) -> None:
         """Compensate only when a worker cannot own these files.
 
         A failed publication may have reached the broker. If Redis is unavailable,
@@ -44,14 +45,14 @@ class TranscriptionService:
         try:
             job = self.repository.get(job_id)
             if job is None or job.status in ('completed', 'failed'):
-                self.cleanup(job_id)
+                self.cleanup_job_resources(job_id)
             elif self.repository.fail(job_id, 'submission_failed',
                                       'The job could not be submitted. Please upload again.', 'queued'):
-                self.cleanup(job_id)
+                self.cleanup_job_resources(job_id)
         except Exception:
             log.warning('job=%s event=cleanup_deferred', job_id)
 
-    def submit(self, job_id: str, source: BinaryIO) -> Job:
+    def store_and_enqueue(self, job_id: str, source: BinaryIO) -> Job:
         self.storage.save(job_id, source, self.settings.max_upload_bytes)
         if not self.admission.renew(job_id, self.settings.queue_timeout + self.settings.cleanup_grace):
             raise JobError('upload_expired', 'The upload expired. Please upload again.')
@@ -60,10 +61,10 @@ class TranscriptionService:
         self.dispatcher.dispatch(job_id)
         return job
 
-    def get(self, job_id: str) -> Job | None:
+    def find_job(self, job_id: str) -> Job | None:
         return self.repository.get(job_id)
 
-    def process(self, job_id: str, processor: MediaProcessor, engine: TranscriptionEngine) -> None:
+    def transcribe_queued_job(self, job_id: str, processor: MediaProcessor, engine: TranscriptionEngine) -> None:
         if not self.repository.claim(job_id):
             return
         log.info('job=%s event=claimed', job_id)
@@ -83,11 +84,11 @@ class TranscriptionService:
             log.warning('job=%s event=failed code=%s', job_id, error.code)
         finally:
             try:
-                self.cleanup(job_id)
+                self.cleanup_job_resources(job_id)
             except Exception:
                 log.warning('job=%s event=cleanup_deferred', job_id)
 
-    def reconcile(self) -> None:
+    def reconcile_expired_work(self) -> None:
         """Deadlines include hard task limit + grace; stale heartbeat alone is insufficient."""
         now, s = time.time(), self.settings
         for job in self.repository.active():
@@ -98,13 +99,13 @@ class TranscriptionService:
                            and not self.heartbeat.job_alive(job.id))
             if expired and self.repository.fail(job.id, 'interrupted',
                                                 'The job expired or was interrupted. Please upload again.', job.status):
-                self.cleanup(job.id)
+                self.cleanup_job_resources(job.id)
         for job_id in self.admission.expired():
             if job_id in self.uploading:
                 continue
             job = self.repository.get(job_id)
             if job is None or job.status in ('completed', 'failed'):
-                self.cleanup(job_id)
+                self.cleanup_job_resources(job_id)
         # Also recover directories after Redis loss, conservatively after every
         # possible upload/queue/processing window; never delete a known active job.
         before = now - s.upload_timeout - s.queue_timeout - s.processing_timeout - s.cleanup_grace
@@ -112,4 +113,4 @@ class TranscriptionService:
             if job_id not in self.uploading and not self.heartbeat.job_alive(job_id):
                 job = self.repository.get(job_id)
                 if job is None or job.status in ('completed', 'failed'):
-                    self.cleanup(job_id)
+                    self.cleanup_job_resources(job_id)

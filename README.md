@@ -69,7 +69,7 @@ Duration is authoritatively checked after bounded FFmpeg decoding. Container met
 
 ## Architecture and replaceable contracts
 
-Application services depend on four replaceable contracts: `JobRepository`, `MediaStorage`, `TaskDispatcher`, and `TranscriptionEngine`. Redis, local storage, Celery, FFmpeg, and faster-whisper are infrastructure adapters behind those boundaries. Changing an adapter should not require rewriting business orchestration.
+Application services depend on replaceable contracts such as `JobRepository`, `MediaStorage`, `TaskDispatcher`, and `TranscriptionEngine`. Redis, local storage, Celery, FFmpeg, and faster-whisper are adapters that explicitly implement those contracts. FastAPI resolves settings, the Redis client, repository, storage, dispatcher, admission control, heartbeat, and finally the service through separate `Depends` providers in `dependencies.py`. Redis is currently used for temporary job records, admission/heartbeat coordination, and Celery transport, but the service itself depends only on interfaces and can receive replacements.
 
 The repository pattern is used explicitly: the current `RedisJobRepository` implements `JobRepository` and stores temporary job records in Redis. The current flow is:
 
