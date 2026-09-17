@@ -15,8 +15,12 @@ describe('transcription UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Upload and transcribe' }))
     await flush()
     expect(screen.getByText('Status: queued')).toBeTruthy()
+    expect(screen.getByText('Checking status automatically')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /refresh now/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'New upload' })).toBeNull()
     await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
     expect(screen.getByText('hello world')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'New upload' })).toBeTruthy()
   })
 
   it('stops polling after a terminal response', async () => {
@@ -45,5 +49,27 @@ describe('transcription UI', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
     expect(screen.getByText('Status: queued')).toBeTruthy()
     expect(window.localStorage.getItem('media-transcriber.active-job')).toBe('a'.repeat(32))
+  })
+
+  it('reveals New upload when a restored job has failed', async () => {
+    window.localStorage.setItem('media-transcriber.active-job', 'a'.repeat(32))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ id: 'a'.repeat(32), status: 'failed', stage: null, created_at: '', started_at: null, finished_at: '', expires_at: '', duration_seconds: null, text: null, error: { code: 'processing_failed', message: 'Unable to process media.' }, status_url: '/api/transcriptions/x' }))))
+    render(<App />)
+    await flush()
+    expect(screen.getByText('Transcription failed')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'New upload' })).toBeTruthy()
+    expect(screen.queryByText('Checking status automatically')).toBeNull()
+  })
+
+  it('shows a small upload indicator without an overlay while submission is pending', async () => {
+    let resolveSubmission: ((response: Response) => void) | undefined
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { resolveSubmission = resolve })))
+    render(<App />)
+    fireEvent.change(screen.getByLabelText('Media file'), { target: { files: [new File(['x'], 'audio.mp3', { type: 'audio/mpeg' })] } })
+    fireEvent.click(screen.getByRole('button', { name: 'Upload and transcribe' }))
+    await flush()
+    expect(screen.getByRole('status').textContent).toContain('Uploading your media…')
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    await act(async () => { resolveSubmission?.(new Response(JSON.stringify({ id: 'a'.repeat(32), status: 'queued', stage: null, created_at: '', started_at: null, finished_at: null, expires_at: null, duration_seconds: null, text: null, error: null, status_url: '/api/transcriptions/x' }), { status: 202 })) })
   })
 })
