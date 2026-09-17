@@ -59,6 +59,9 @@ class FakeStorage:
     def free_bytes(self):
         return 10**12
 
+    def old_directories(self, before):
+        return []
+
 
 class FakeAdmission:
     def __init__(self):
@@ -84,7 +87,8 @@ class TranscriptionServiceTest(unittest.TestCase):
         self.repository = FakeRepository()
         self.storage = FakeStorage()
         self.admission = FakeAdmission()
-        self.dispatcher = SimpleNamespace(dispatch=lambda job_id: None)
+        self.dispatched = []
+        self.dispatcher = SimpleNamespace(dispatch=self.dispatched.append)
         self.service = TranscriptionService(
             self.repository, self.storage, self.dispatcher, self.admission,
             SimpleNamespace(ready=lambda: True, job_alive=lambda job_id: False),
@@ -127,6 +131,40 @@ class TranscriptionServiceTest(unittest.TestCase):
         self.assertEqual(result.error['code'], 'submission_failed')
         self.assertNotIn('job', self.storage.files)
         self.assertEqual(self.admission.released, ['job'])
+
+    def test_reconcile_fails_only_stale_processing_job_and_does_not_retry(self):
+        stale = self.submit('stale')
+        live = self.submit('live')
+        self.repository.claim(stale.id)
+        self.repository.claim(live.id)
+        stale.started_at = -100
+        self.service.heartbeat = SimpleNamespace(
+            job_alive=lambda job_id: job_id == live.id,
+        )
+
+        self.service.reconcile()
+
+        result = self.repository.get(stale.id)
+        self.assertEqual(result.status, 'failed')
+        self.assertEqual(result.error, {
+            'code': 'interrupted',
+            'message': 'The job expired or was interrupted. Please upload again.',
+        })
+        self.assertNotIn(stale.id, self.storage.files)
+        self.assertEqual(self.admission.released, [stale.id])
+        self.assertEqual(self.dispatched, [stale.id, live.id])
+
+        self.assertEqual(self.repository.get(live.id).status, 'processing')
+        self.assertIn(live.id, self.storage.files)
+        self.assertIn(live.id, self.admission.reserved)
+
+        calls = []
+        self.service.process(
+            stale.id,
+            SimpleNamespace(normalize=lambda source, destination: 1.0),
+            SimpleNamespace(transcribe=lambda audio: calls.append(audio)),
+        )
+        self.assertEqual(calls, [])
 
 
 if __name__ == '__main__':
