@@ -51,6 +51,17 @@ describe('transcription UI', () => {
     expect(window.localStorage.getItem('media-transcriber.active-job')).toBe('a'.repeat(32))
   })
 
+  it('forgets an expired restored job after one polling 404', async () => {
+    window.localStorage.setItem('media-transcriber.active-job', 'a'.repeat(32))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response('', { status: 404 })))
+    render(<App />)
+    await flush()
+    expect(screen.getByRole('alert').textContent).toContain('It may have expired or the service restarted. Please start a new upload.')
+    expect(window.localStorage.getItem('media-transcriber.active-job')).toBeNull()
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
   it('reveals New upload when a restored job has failed', async () => {
     window.localStorage.setItem('media-transcriber.active-job', 'a'.repeat(32))
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ id: 'a'.repeat(32), status: 'failed', stage: null, created_at: '', started_at: null, finished_at: '', expires_at: '', duration_seconds: null, text: null, error: { code: 'processing_failed', message: 'Unable to process media.' }, status_url: '/api/transcriptions/x' }))))

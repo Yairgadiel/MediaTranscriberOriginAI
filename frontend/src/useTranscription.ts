@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { getJob, submit, type TranscriptionJob } from './api'
+import { ApiError, getJob, submit, type TranscriptionJob } from './api'
 
 const storageKey = 'media-transcriber.active-job'
 const terminal = (job: TranscriptionJob) => job.status === 'completed' || job.status === 'failed'
@@ -31,11 +31,18 @@ export function useTranscription() {
       if (terminal(next)) window.localStorage.removeItem(storageKey)
     } catch (cause) {
       if ((cause as Error).name !== 'AbortError') {
+        if (cause instanceof ApiError && cause.status === 404) {
+          stop()
+          window.localStorage.removeItem(storageKey)
+          setJob(null)
+          setError(cause.message)
+          return
+        }
         setError((cause as Error).message || 'Unable to refresh status. Retrying shortly.')
         pollTimer.current = window.setTimeout(() => void refresh(jobId), 5000)
       }
     }
-  }, [])
+  }, [stop])
 
   useEffect(() => {
     const jobId = window.localStorage.getItem(storageKey)

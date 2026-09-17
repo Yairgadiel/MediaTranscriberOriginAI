@@ -12,7 +12,7 @@ docker-compose up --build -d --wait --wait-timeout 600
 
 The installed environment used the legacy `docker-compose` executable. If your installation provides the Compose plugin instead, use the equivalent `docker compose up --build -d --wait --wait-timeout 600`. Compose binds the API to `127.0.0.1:8000` by default; Redis is not published externally. Open <http://localhost:8000> when the health check is ready.
 
-The worker downloads the pinned model and loads it during worker initialization/startup. `/health` remains unavailable (`503`) until Redis, temporary storage, the worker heartbeat, and model readiness are all available. The first startup is therefore slower; the first accepted transcription does not separately pay the model-download cost when the worker is already ready.
+The worker downloads the pinned model and loads it during worker initialization/startup. `/health` remains unavailable (`503`) until Redis, temporary storage, the worker heartbeat, and model readiness are all available. The first startup is therefore slower; the first accepted transcription does not separately pay the model-download cost when the worker is already ready. A task delivered while a recycled worker is still loading waits for `TRANSCRIBER_MODEL_LOAD_TIMEOUT` (600 seconds by default), then follows the existing interrupted-job path; ordinary uploads are rejected until readiness.
 
 The supported Compose flow needs no host Python, Node, FFmpeg, GPU, Hugging Face token, or media download. Copy `.env.example` to `.env` only when changing the documented Compose-passed limits.
 
@@ -61,9 +61,9 @@ curl -F 'file=@my-recording.mp3' http://localhost:8000/api/transcriptions
 curl http://localhost:8000/api/transcriptions/JOB_ID
 ```
 
-`POST /api/transcriptions` returns `202` with a job ID and status URL. Poll `GET /api/transcriptions/{id}` until `completed` (transcript and duration) or `failed` (safe error). Unknown or expired IDs return `404`; capacity returns `429`; unavailable infrastructure returns `503`. The browser does not coordinate separate upload and job-creation endpoints: React/TypeScript submits the single multipart request, then polls.
+`POST /api/transcriptions` returns `202` with a job ID and status URL. Poll `GET /api/transcriptions/{id}` until `completed` (transcript and duration) or `failed` (safe error). A completed transcription with no detected speech is successful and returns `text: ""`, `error: null`, and its measured duration; it is not a failed job. Unknown or expired IDs return `404`; capacity returns `429`; unavailable infrastructure returns `503`. The browser clears a stored job ID and asks for a new upload after a polling `404`. The browser does not coordinate separate upload and job-creation endpoints: React/TypeScript submits the single multipart request, then polls.
 
-The defaults are bounded: 4 GiB upload bytes, 3,600 seconds maximum duration, three active jobs, 7,200 seconds processing timeout, and a 24-hour result TTL. Accepted media is WAV, MP3, M4A, MP4, or WebM only when the first audio stream uses a supported codec. High-bitrate video may exceed the byte limit even when shorter than one hour.
+The defaults are bounded: 4 GiB upload bytes, 3,600 seconds maximum duration, three active jobs, 600 seconds model-load wait, 7,200 seconds processing timeout, and a 24-hour result TTL. `TRANSCRIBER_MODEL_LOAD_TIMEOUT` is configurable alongside the Compose-passed limits in `.env.example`; it is intentionally separate from the processing deadline. Accepted media is WAV, MP3, M4A, MP4, or WebM only when the first audio stream uses a supported codec. High-bitrate video may exceed the byte limit even when shorter than one hour.
 
 Duration is authoritatively checked after bounded FFmpeg decoding. Container metadata may be missing or misleading, so metadata alone is not accepted as proof that an input is within the limit.
 

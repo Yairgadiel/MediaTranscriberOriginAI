@@ -4,6 +4,7 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
@@ -19,6 +20,7 @@ from transcriber.bootstrap import Container
 from transcriber.domain.job import Job, JobError
 
 log = logging.getLogger(__name__)
+STATIC_DIR = Path(__file__).with_name('static')
 
 
 class JobResponse(BaseModel):
@@ -142,7 +144,9 @@ def create_app(container=None):
             file = form.get('file')
             if len(form) != 1 or not isinstance(file, UploadFile):
                 raise HTTPException(400, 'Send exactly one file field named file.')
-            if file.size is None or file.size > s.max_upload_bytes:
+            # The bounded request stream and LocalMediaStorage enforce the actual
+            # byte limit. Starlette may not know a part's size on every parser path.
+            if file.size is not None and file.size > s.max_upload_bytes:
                 raise HTTPException(413, 'The file exceeds the size limit.')
             job = await run_in_threadpool(service.submit, job_id, file.file)
             accepted = True
@@ -174,7 +178,7 @@ def create_app(container=None):
 
     # Docker copies the compiled React application here. API routes are registered
     # first so the catch-all static mount cannot shadow them during development.
-    app.mount('/', StaticFiles(directory='backend/src/transcriber/entrypoints/static', html=True,
+    app.mount('/', StaticFiles(directory=STATIC_DIR, html=True,
                                check_dir=False), name='web')
     return app
 

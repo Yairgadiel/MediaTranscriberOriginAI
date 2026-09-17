@@ -2,14 +2,17 @@ import io
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from redis.exceptions import ConnectionError
+from starlette.datastructures import FormData, UploadFile
 
 from transcriber.domain.job import Job, JobError
+from transcriber.entrypoints import api as api_entrypoint
 from transcriber.entrypoints.api import create_app
 from transcriber.infrastructure.redis_coordination import RedisWorkerHeartbeat
 
@@ -153,6 +156,24 @@ def test_http_upload_status_validation_and_capacity(context):
         assert response.status_code == 429 and response.headers['retry-after'] == '5'
 
 
+def test_http_upload_accepts_unknown_part_size_with_streaming_limit(context, monkeypatch):
+    async def parse_with_unknown_size(parser):
+        return FormData([('file', UploadFile(io.BytesIO(b'audio'), filename='x', size=None))])
+
+    monkeypatch.setattr(api_entrypoint.MultiPartParser, 'parse', parse_with_unknown_size)
+    c = context
+    with TestClient(create_app(c)) as api:
+        response = api.post('/api/transcriptions', files={'file': ('x', b'audio')})
+    assert response.status_code == 202
+    assert c.storage.input_path(response.json()['id']).read_bytes() == b'audio'
+
+
+def test_static_mount_uses_package_relative_directory():
+    app = create_app()
+    web = next(route for route in app.routes if route.name == 'web')
+    assert Path(web.app.directory) == api_entrypoint.STATIC_DIR
+
+
 def test_http_actual_body_limit_without_content_length(context):
     c = context
     with TestClient(create_app(c)) as api:
@@ -162,6 +183,20 @@ def test_http_actual_body_limit_without_content_length(context):
         assert response.status_code == 413
         assert c.redis.zcard('admission:leases') == 0
         assert list(c.settings.work_dir.iterdir()) == []
+
+
+def test_empty_transcript_is_a_completed_api_result(context):
+    c = context
+    job = submitted(c)
+    c.service.process(job.id, SimpleNamespace(normalize=lambda source, destination: 1.0),
+                      SimpleNamespace(transcribe=lambda audio: ''))
+    with TestClient(create_app(c)) as api:
+        response = api.get(f'/api/transcriptions/{job.id}')
+    assert response.status_code == 200
+    body = response.json()
+    assert body['status'] == 'completed'
+    assert body['text'] == ''
+    assert body['error'] is None
 
 
 def test_http_worker_unavailable_and_publication_failure(context):

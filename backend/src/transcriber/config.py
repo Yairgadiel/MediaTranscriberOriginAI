@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     max_jobs: int = Field(3, ge=1, le=10)
     result_ttl: int = Field(86400, ge=1)
     upload_timeout: int = Field(900, ge=1)
+    model_load_timeout: int = Field(600, ge=1)
     processing_timeout: int = Field(7200, ge=5)
     decode_timeout: int = Field(300, ge=1)
     cleanup_grace: int = Field(60, ge=5)

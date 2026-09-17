@@ -38,7 +38,7 @@ def shutdown(**kwargs):
 
 @celery_app.task(name='transcriber.process')
 def process(job_id: str):
-    if not ready.wait(min(120, container.settings.processing_timeout - 3)):
+    if not ready.wait(container.settings.model_load_timeout):
         # CAS in abandon protects against duplicate delivery of already-owned work.
         container.service.abandon(job_id)
         return
