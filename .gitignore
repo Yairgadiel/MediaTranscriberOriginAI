@@ -10,7 +10,7 @@ dist/
 .coverage
 htmlcov/
 work/
-models/
+/models/
 .cache/
 benchmarks/local/
 *.wav
@@ -20,3 +20,4 @@ benchmarks/local/
 *.m4a
 .DS_Store
 *.flac
+/docs/implementation-status.md
