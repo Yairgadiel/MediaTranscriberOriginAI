@@ -22,3 +22,4 @@ benchmarks/local/
 *.flac
 /docs/implementation-status.md
 transcription-assignment-plan.md
+AGENTS.md
