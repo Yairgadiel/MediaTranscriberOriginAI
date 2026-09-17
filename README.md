@@ -90,6 +90,26 @@ flowchart LR
     Browser -->|poll status/result| API
 ```
 
+The request is deliberately handled in stages:
+
+1. The API reserves an admission slot before accepting the upload. This bounds the number of uploads, queued jobs, and expensive processing tasks that can compete for disk and memory.
+2. The API writes the upload to temporary storage using a generated job ID, creates the queued job record, and publishes only that ID to Celery. If publication fails, it compensates by removing the temporary record/file and releasing the reservation rather than returning a misleading `202`.
+3. The worker atomically changes the job from `queued` to `processing`. A duplicate delivery therefore cannot start a second transcription for the same job.
+4. The worker reads the trusted temporary path, uses bounded FFmpeg decoding to validate duration and create normalized mono 16 kHz audio, then passes that audio to the already-loaded CPU model. Keeping decoding and inference in the worker leaves the API responsive.
+5. The worker writes either a completed transcript or a safe failure to the job record. The browser learns the result by polling the API; it never needs access to Redis, Celery, the filesystem, or model internals.
+6. Finally, ordinary cleanup removes temporary media and releases the admission slot. Redis records and model weights remain only for their configured short-lived or caching purposes, so restart recovery is intentionally limited in this local design.
+
+### Processing details
+
+For one accepted job, the worker performs these processing steps:
+
+1. **Probe the media.** `ffprobe` checks the container, selects the first audio stream, requires a supported codec, and rejects files with no audio track.
+2. **Decode and normalize.** FFmpeg decodes only the selected audio stream, ignores video/subtitle/data streams, converts it to mono 16 kHz signed 16-bit PCM WAV, and stops after the configured duration limit plus a small detection margin.
+3. **Verify decoded duration.** The worker reads the generated WAV frame count and calculates duration from samples. This decoded duration—not a potentially misleading container header—is used for the authoritative limit check.
+4. **Run transcription.** The already-loaded faster-whisper CPU INT8 model reads the normalized WAV. The runtime uses PyAV for audio reading, while the application fully consumes the returned segment iterator before saving the transcript.
+5. **Apply voice-activity filtering.** faster-whisper runs with `vad_filter=True`, so likely non-speech regions are excluded from transcription segments. The current implementation does not report how much silence VAD removed and does not rewrite the WAV; a statement such as “VAD removed 4:51” would require additional instrumentation.
+6. **Persist the result.** The worker joins the surviving segment text, stores the transcript and decoded media duration, and then removes temporary input and normalized-audio files.
+
 Only an opaque job ID crosses the local Celery boundary; media bytes remain in the shared Docker `work` volume. Replacing an adapter does not automatically provide identical capabilities, durability, delivery guarantees, migration behavior, or recovery semantics. Those properties belong to the chosen implementation and its operational design.
 
 ## Temporary data and honest limitations
