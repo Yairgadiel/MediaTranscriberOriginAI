@@ -21,3 +21,4 @@ benchmarks/local/
 .DS_Store
 *.flac
 /docs/implementation-status.md
+transcription-assignment-plan.md
