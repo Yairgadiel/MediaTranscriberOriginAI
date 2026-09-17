@@ -10,6 +10,19 @@ Docker Desktop or another Compose-compatible Docker engine is required. Allocate
 docker compose up --build
 ```
 
+If your installation provides the legacy standalone command instead of the
+`docker compose` plugin, build once and then start without rebuilding. This avoids
+the classic builder racing while API and worker services request the same image:
+
+```sh
+docker build -t media-transcriber:local .
+docker-compose up --no-build
+```
+
+You can check which interface is available with `docker compose version` and
+`docker-compose --version`. The buildx warning from the classic builder is
+non-blocking for this project; the image does not require BuildKit-only features.
+
 Open <http://localhost:8000>. The worker downloads the public model to the `model-cache` volume on first use, so the first transcription takes longer. The service binds only to localhost and Redis is not published.
 
 Copy `.env.example` to `.env` only to override limits. The supported Compose flow needs no host Python, Node, FFmpeg, GPU, Hugging Face token, or media download.
