@@ -8,6 +8,7 @@ celery_app.conf.update(task_ignore_result=True, result_backend=None, task_serial
     broker_connection_timeout=3, broker_connection_retry_on_startup=True,
     broker_transport_options={'socket_timeout': 3, 'socket_connect_timeout': 3},
     task_soft_time_limit=s.processing_timeout - 2, task_time_limit=s.processing_timeout,
+    worker_max_tasks_per_child=s.worker_max_tasks_per_child,
     worker_hijack_root_logger=False)
 
 

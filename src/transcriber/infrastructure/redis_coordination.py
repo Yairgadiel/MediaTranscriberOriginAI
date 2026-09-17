@@ -1,5 +1,6 @@
 import time
 import threading
+from uuid import uuid4
 
 class RedisAdmissionControl:
     def __init__(self, client, settings):
@@ -36,8 +37,10 @@ class RedisWorkerHeartbeat:
     """One worker child; expiring readiness survives neither crashes nor outages."""
     def __init__(self, client, ttl=20):
         self.client, self.ttl = client, ttl
+        self.token = uuid4().hex
         self.current_job = None
         self.stop = threading.Event()
+        self._thread = None
 
     def ready(self):
         return bool(self.client.exists('worker:ready'))
@@ -45,10 +48,32 @@ class RedisWorkerHeartbeat:
     def job_alive(self, job_id):
         return bool(self.client.exists('worker:job:' + job_id))
 
+    def mark_not_ready(self):
+        """A replacement child must not inherit readiness from its predecessor."""
+        self.client.delete('worker:ready')
+
+    def shutdown(self):
+        self.stop.set()
+        if self._thread:
+            self._thread.join(timeout=4)
+        # Do not remove readiness that a newly loaded replacement has published.
+        self.client.eval("""
+        if redis.call('GET', KEYS[1]) == ARGV[1] then
+            redis.call('DEL', KEYS[1])
+        end
+        return 1
+        """, 1, 'worker:ready', self.token)
+
+    def start(self):
+        self._thread = threading.Thread(target=self.run, daemon=True)
+        self._thread.start()
+
     def run(self):
         while not self.stop.is_set():
             try:
-                self.client.set('worker:ready', '1', ex=self.ttl)
+                if self.stop.is_set():
+                    return
+                self.client.set('worker:ready', self.token, ex=self.ttl)
                 if self.current_job:
                     self.client.set('worker:job:' + self.current_job, '1', ex=self.ttl)
             except Exception:

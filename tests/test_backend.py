@@ -11,6 +11,7 @@ from redis.exceptions import ConnectionError
 
 from transcriber.domain.job import Job, JobError
 from transcriber.entrypoints.api import create_app
+from transcriber.infrastructure.redis_coordination import RedisWorkerHeartbeat
 
 
 def submitted(c):
@@ -177,3 +178,33 @@ def test_http_worker_unavailable_and_publication_failure(context):
         assert response.status_code == 503 and 'private' not in response.text
         assert c.redis.zcard('admission:leases') == 0
         assert list(c.settings.work_dir.iterdir()) == []
+
+
+def test_worker_replacement_withholds_and_preserves_readiness(context):
+    """A recycled child must not admit uploads until its own model has loaded."""
+    c = context
+    predecessor = RedisWorkerHeartbeat(c.redis, ttl=20)
+    predecessor.start()
+    for _ in range(20):
+        if predecessor.ready():
+            break
+        time.sleep(0.01)
+    assert predecessor.ready()
+
+    predecessor.shutdown()
+    assert not predecessor.ready()
+
+    replacement = RedisWorkerHeartbeat(c.redis, ttl=20)
+    replacement.mark_not_ready()
+    assert not replacement.ready()
+    replacement.start()
+    for _ in range(20):
+        if replacement.ready():
+            break
+        time.sleep(0.01)
+    assert replacement.ready()
+
+    predecessor.shutdown()  # A delayed predecessor shutdown cannot remove replacement readiness.
+    assert replacement.ready()
+    replacement.shutdown()
+    assert not replacement.ready()

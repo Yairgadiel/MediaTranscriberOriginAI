@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     cleanup_grace: int = Field(60, ge=5)
     disk_margin_bytes: int = Field(1024**3, ge=0)
     heartbeat_ttl: int = Field(20, ge=5)
+    worker_max_tasks_per_child: int = Field(5, ge=1)
 
     @property
     def queue_timeout(self) -> int:

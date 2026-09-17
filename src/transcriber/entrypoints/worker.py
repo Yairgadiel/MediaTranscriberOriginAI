@@ -15,6 +15,8 @@ def initialize(**kwargs):
     global container
     ready.clear()
     container = Container()
+    # A recycled child starts loading with no ready signal. Concurrency is fixed at one.
+    container.heartbeat.mark_not_ready()
 
     # Child-init handlers must return promptly. Model is loaded only after fork.
     def load():
@@ -22,7 +24,7 @@ def initialize(**kwargs):
         try:
             processor, engine = container.load_engine()
             ready.set()
-            container.heartbeat.run()
+            container.heartbeat.start()
         except Exception:
             logging.getLogger(__name__).exception('Model initialization failed')
     threading.Thread(target=load, daemon=True).start()
@@ -31,7 +33,7 @@ def initialize(**kwargs):
 @worker_process_shutdown.connect
 def shutdown(**kwargs):
     if container:
-        container.heartbeat.stop.set()
+        container.heartbeat.shutdown()
 
 
 @celery_app.task(name='transcriber.process')
