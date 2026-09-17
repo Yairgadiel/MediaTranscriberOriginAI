@@ -2,12 +2,17 @@
 .venv
 .env
 **/__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.ruff_cache
 **/node_modules
 **/dist
 benchmarks/local
 work
 models
 .cache
+**/.DS_Store
 *.mp3
 *.wav
 *.flac
