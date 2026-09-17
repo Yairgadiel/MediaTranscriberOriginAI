@@ -2,7 +2,7 @@
 
 Runtime-verified pins (native ARM64, user-provided five-minute MP3): Python 3.11.13, faster-whisper 1.2.1,
 CTranslate2 4.6.0, huggingface-hub 0.34.4. The resolved dependency lock captures the installed benchmark environment. The
-Dockerfile was then changed to use that lock; a fresh locked rebuild remains pending.
+Dockerfile was then changed to use that lock, and the final Compose checkpoint completed a fresh locked image build.
 
 Model: `Systran/faster-whisper-base.en`, revision
 `3d3d5dee26484f91867d81cb899cfcf72b96be6c`. Its
@@ -43,4 +43,4 @@ long-form evidence and final resource/time-limit decisions remain pending.
 Actual metric reports: `results/sample-short-arm64.json` and
 `results/runtime-versions-arm64.txt`. Full execution history and outstanding
 verification are in `../docs/implementation-status.md`. No one-hour run or
-manual transcript quality assessment has been performed.
+manual transcript quality assessment has been performed. The measured ARM64 results must not be generalized to Intel/AMD64 compatibility or performance.

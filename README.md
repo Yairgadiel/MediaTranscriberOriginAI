@@ -1,98 +1,125 @@
 # Media Transcriber
 
-An asynchronous, CPU-only English transcription service. Upload one audio or video file to receive a short-lived transcript. The API is public under `/api`; the Docker image serves the compiled browser UI from the same FastAPI process.
+An asynchronous, CPU-only English transcription service. Upload one audio or video file, poll a job, and receive a short-lived transcript. The unauthenticated API is exposed under `/api`; the Docker image serves the compiled React/TypeScript UI from the same FastAPI process.
 
 ## Quick start
 
-Docker Desktop or another Compose-compatible Docker engine is required. Allocate the stack the environment used for the benchmark: four CPUs and about 8 GiB of VM memory. That allocation is tested evidence for the benchmark environment, not a minimum system requirement.
+Docker Desktop or another Compose-compatible Docker engine is required. The verified benchmark environment provided four CPUs and about 8 GiB of VM memory. That is measured environment information, not a minimum requirement.
 
 ```sh
-docker compose up --build
+docker-compose up --build -d --wait --wait-timeout 600
 ```
 
-If your installation provides the legacy standalone command instead of the
-`docker compose` plugin, build once and then start without rebuilding. This avoids
-the classic builder racing while API and worker services request the same image:
+The installed environment used the legacy `docker-compose` executable. If your installation provides the Compose plugin instead, use the equivalent `docker compose up --build -d --wait --wait-timeout 600`. Compose binds the API to `127.0.0.1:8000` by default; Redis is not published externally. Open <http://localhost:8000> when the health check is ready.
+
+The worker downloads the pinned model and loads it during worker initialization/startup. `/health` remains unavailable (`503`) until Redis, temporary storage, the worker heartbeat, and model readiness are all available. The first startup is therefore slower; the first accepted transcription does not separately pay the model-download cost when the worker is already ready.
+
+The supported Compose flow needs no host Python, Node, FFmpeg, GPU, Hugging Face token, or media download. Copy `.env.example` to `.env` only when changing the documented Compose-passed limits.
+
+## Verification
+
+The following commands were run successfully in this repository. The backend requires Python 3.11 and the locked dependencies, a local Redis instance, and host FFmpeg. The frontend requires Node/npm.
+
+Start a temporary test-only Redis with persistence disabled, then run the backend suite:
 
 ```sh
-docker build -t media-transcriber:local .
-docker-compose up --no-build
+redis-server --port 6380 --save "" --appendonly no
+TEST_REDIS_URL=redis://127.0.0.1:6380/15 .venv/bin/python -m pytest tests/test_backend.py tests/test_media.py tests/unit/test_transcription_service.py -q
 ```
 
-You can check which interface is available with `docker compose version` and
-`docker-compose --version`. The buildx warning from the classic builder is
-non-blocking for this project; the image does not require BuildKit-only features.
+The recorded result was `17 passed` with one upstream AnyIO/Starlette TestClient deprecation warning. Stop the temporary Redis process after the test. FFmpeg is used by the media tests and must be installed and on `PATH`.
 
-Open <http://localhost:8000>. The worker downloads the public model to the `model-cache` volume on first use, so the first transcription takes longer. The service binds only to localhost and Redis is not published.
+From `frontend/`, run the TypeScript check and production build:
 
-Copy `.env.example` to `.env` only to override limits. The supported Compose flow needs no host Python, Node, FFmpeg, GPU, Hugging Face token, or media download.
+```sh
+npx tsc -b
+npm run build
+```
 
-The optional frontend development server is configured to proxy `/api` to a backend at `127.0.0.1:8000`.
+Run the frontend tests with the compatibility flag required by the verified Node 25 host:
 
-## Use the API
+```sh
+NODE_OPTIONS=--no-experimental-webstorage npm test
+```
 
-The UI submits the same single public request. Submit a multipart file and retain the returned job ID or `status_url`:
+The recorded result was `5 passed`; the build transformed 31 modules. The planned Docker build uses Node 22 and does not need that host-specific flag.
+
+Optional end-to-end smoke test, using the supplied `sample-speech-5m.mp3`, is the verified Compose command:
+
+```sh
+docker-compose up --build -d --wait --wait-timeout 600
+```
+
+The checkpoint then verified `GET /health`, `queued → processing → completed`, and ordinary work-directory cleanup before bringing the stack down. It did not verify one-hour input, AMD64/Intel execution, accuracy/WER, interruption recovery, or repeated-job memory behavior.
+
+## API and limits
+
+The local public flow has one upload-and-submit endpoint followed by polling:
 
 ```sh
 curl -F 'file=@my-recording.mp3' http://localhost:8000/api/transcriptions
 curl http://localhost:8000/api/transcriptions/JOB_ID
 ```
 
-`POST /api/transcriptions` returns `202` with status `queued`. Poll `GET /api/transcriptions/{id}` until `completed` (with `text` and `duration_seconds`) or `failed` (with a safe error). An unknown or expired ID returns `404`; capacity returns `429`; an unavailable worker or state store returns `503`. `GET /health` is ready only when Redis, temporary storage, and a model-ready worker are available.
+`POST /api/transcriptions` returns `202` with a job ID and status URL. Poll `GET /api/transcriptions/{id}` until `completed` (transcript and duration) or `failed` (safe error). Unknown or expired IDs return `404`; capacity returns `429`; unavailable infrastructure returns `503`. The browser does not coordinate separate upload and job-creation endpoints: React/TypeScript submits the single multipart request, then polls.
 
-The React/TypeScript UI prevents duplicate uploads, retains a nonterminal job ID in browser localStorage, distinguishes a temporary polling error from a failed transcription, explains a `404` as expiration/restart, and offers copy and text download after completion. It does not display elapsed waiting time.
+The defaults are bounded: 4 GiB upload bytes, 3,600 seconds maximum duration, three active jobs, 7,200 seconds processing timeout, and a 24-hour result TTL. Accepted media is WAV, MP3, M4A, MP4, or WebM only when the first audio stream uses a supported codec. High-bitrate video may exceed the byte limit even when shorter than one hour.
 
-## Limits and configuration
+Duration is authoritatively checked after bounded FFmpeg decoding. Container metadata may be missing or misleading, so metadata alone is not accepted as proof that an input is within the limit.
 
-Defaults are deliberately bounded:
+## Architecture and replaceable contracts
 
-| Limit or Compose override | Default | Meaning |
-| --- | ---: | --- |
-| `TRANSCRIBER_MAX_UPLOAD_BYTES` | 4 GiB | Maximum file bytes; the request allows a small multipart framing allowance |
-| maximum duration | 3,600 seconds | Audio longer than one hour is rejected after media inspection |
-| active jobs | 3 | Atomic Redis admission reservations, including disk margin |
-| `TRANSCRIBER_PROCESSING_TIMEOUT` | 7,200 seconds | Per-job worker processing allowance |
-| result TTL | 24 hours | Redis result retrieval window |
-| `TRANSCRIBER_CLEANUP_GRACE` | 60 seconds | Extra time retained for cleanup/reconciliation deadlines |
-| `TRANSCRIBER_WORKER_MAX_TASKS_PER_CHILD` | 5 jobs | Worker-child recycling threshold |
+Application services depend on four replaceable contracts: `JobRepository`, `MediaStorage`, `TaskDispatcher`, and `TranscriptionEngine`. Redis, local storage, Celery, FFmpeg, and faster-whisper are infrastructure adapters behind those boundaries. Changing an adapter should not require rewriting business orchestration.
 
-Compose reads these four optional overrides from `.env`; copy `.env.example` to `.env` to change them. Other `TRANSCRIBER_` settings in `src/transcriber/config.py` are runtime settings, but Compose does not pass them through as `.env` overrides. The API reserves capacity before parsing an upload, bounds both declared and streamed bodies, and validates/normalizes media with FFmpeg. It accepts WAV, MP3, M4A, MP4, and WebM only when the first audio stream uses a supported codec. Large high-bitrate video can exceed the byte limit even when shorter than an hour; extract or compress audio first.
+The repository pattern is used explicitly: the current `RedisJobRepository` implements `JobRepository` and stores temporary job records in Redis. The current flow is:
 
-## Architecture and lifecycle
+```text
+upload → reserve capacity → temporary file → Redis job → Celery job ID
+      → atomic claim → bounded FFmpeg decode/WAV → faster-whisper
+      → result record → cleanup
+```
 
-The entrypoint layer contains FastAPI routes and thin Celery tasks. The application service coordinates business flow through domain contracts; infrastructure provides Redis repositories/admission/heartbeat, local shared-volume storage, Celery dispatch, FFmpeg processing, and faster-whisper inference. API startup does not import or load the model.
+Only an opaque job ID crosses the local Celery boundary; media bytes remain in the shared Docker `work` volume. Replacing an adapter does not automatically provide identical capabilities, durability, delivery guarantees, migration behavior, or recovery semantics. Those properties belong to the chosen implementation and its operational design.
 
-`upload → reserve capacity → temporary file → queued Redis record → Celery job ID → claim → FFmpeg WAV → transcription → completed/failed record → cleanup`
+## Temporary data and honest limitations
 
-Only job IDs pass through Celery; media bytes stay in the shared `work` volume. The UI makes one upload-and-submit request rather than coordinating separate browser-side storage and job APIs.
+`work` contains upload and normalized-audio files only while needed; ordinary success/failure cleanup removes them. `model-cache` retains model weights as a startup optimization. Docker named volumes may outlive containers, but neither volume is durable production user history. Redis persistence is disabled. Pending jobs and results may be lost or interrupted on Redis or worker restart, and users may need to upload again. The local system has no durable restart recovery and no atomic job-record/task-publication guarantee.
 
-| Production direction | Initial delivery | Cost of the local choice |
-| --- | --- | --- |
-| Blob storage | Shared Docker `work` volume behind `MediaStorage` | Workers must share one host volume |
-| Direct client uploads | Multipart through the API | The API carries upload bandwidth, connections, and temporary disk use |
-| Durable queue/recovery | Redis Celery broker, best-effort publication | No durable broker/recovery guarantee and no atomic job-record/task-publication guarantee |
-| PostgreSQL job records | Temporary Redis records | Restart can lose job state and results |
-| Transactional outbox | Explicit compensation after publication failure | An ambiguous publication can still require reconciliation |
+One-hour input support is designed for but has not been verified with a user-provided one-hour recording. Measurements are native Linux ARM64 in Colima only: Python 3.11.13, faster-whisper 1.2.1, CTranslate2 4.6.0, four CPUs, about 8 GiB VM memory, CPU INT8, four threads. A supplied five-minute MP3 measured 14.8165 seconds cold after model load and 14.3079 seconds warm in the standalone benchmark; peak cgroup memory was 940,720,128 bytes (about 897 MiB). Three warm application jobs were observed around 15.6 seconds and one first application job around 101.9 seconds. These are observations, not guarantees. Intel/AMD64 compatibility and performance, accuracy/WER, silence/video/additional-format behavior beyond focused checks, native interruption, and repeated-job memory growth remain unverified.
 
-## Model and measured evidence
+## Production evolution (not implemented locally)
 
-- Model: `Systran/faster-whisper-base.en`, revision `3d3d5dee26484f91867d81cb899cfcf72b96be6c`, declared MIT license.
-- Runtime measured: Python 3.11.13, faster-whisper 1.2.1, CTranslate2 4.6.0; native Linux ARM64 (Colima), four CPUs, approximately 8 GiB VM memory.
-- Settings: CPU INT8, four threads, beam size 5, English, VAD enabled, and `condition_on_previous_text=False`.
-- Supplied five-minute MP3 (model duration 300.0185 seconds): standalone first run 14.8165 s, warm run 14.3079 s; peak cgroup memory 940,720,128 bytes (about 897 MiB). Three warm application jobs were observed around 15.6 s; one first application job was about 101.9 s. These observations are not a performance guarantee.
+The following is a production AWS design direction, not a claim about the current local system:
 
-## Temporary data and restarts
+```text
+Client
+  → presigned S3 upload
+  → API finalizes and validates the uploaded object
+  → PostgreSQL job plus transactional outbox entry
+  → outbox publisher
+  → SQS transcription queue
+  → scalable worker fleet
+  → S3 media read
+  → FFmpeg/audio preparation and transcription
+  → PostgreSQL result
+  → client polls the API
+```
 
-`work` contains upload and normalized-audio directories only while needed; ordinary success/failure cleanup removes them and releases admission capacity. `model-cache` retains downloaded weights as an optimization. Docker named volumes can outlive containers, but neither is durable user history. Do not delete volumes unless you intend to remove temporary media (`work`) or model cache (`model-cache`).
+The mapping is:
 
-Redis persistence is explicitly disabled. Pending jobs and results can be lost or interrupted when Redis or the worker stack restarts; users may need to upload again. Celery acknowledges tasks early and does not automatically retry inference, so a worker crash can lose in-flight work. An API-only restart does not intentionally clear healthy worker state or shared files.
+| Local implementation | Production direction |
+| --- | --- |
+| Multipart upload through FastAPI | Direct client upload to S3 with a presigned URL and an upload-session/finalization protocol |
+| Shared Docker `work` volume | S3/blob storage |
+| Redis/Celery broker | SQS plus a dead-letter queue |
+| Temporary Redis job records | PostgreSQL |
+| Best-effort queue publication | Transactional outbox and publisher |
+| Single worker | Independently scalable worker fleet |
 
-## Verification
+Production queue messages contain only an opaque job ID, never media bytes. The server generates S3 object keys and validates them at finalization. SQS standard delivery is at-least-once and may duplicate or reorder messages. Workers claim jobs with atomic database transitions and renewable leases, renew SQS visibility for long CPU inference, commit the result before acknowledging the message, and make duplicate deliveries safe through idempotent state transitions. Retries are bounded; poison or invalid jobs go to the dead-letter queue. The outbox closes the database-to-queue publication gap. Media and transcript retention/deletion policies remain explicit.
 
-Local backend verification used Python 3.11.15 provisioned by `uv`: locked imports for FastAPI, Celery, Redis, PyAV, faster-whisper, and the API entrypoint passed; the focused suite passed **17 tests** against a temporary no-persistence local Redis 8.10.1 instance and host FFmpeg (one upstream AnyIO deprecation warning). The frontend TypeScript check, production build, and three focused UI tests passed. The final Docker Compose checkpoint built the current lockfiles, reached ready health, and completed the supplied five-minute MP3 through `queued → processing → completed`; its temporary work directory was absent afterward.
+Preprocessing and inference could later use separate queues, but that is useful only when different hardware or scaling requirements justify the added boundary. Direct S3 upload changes the client protocol, while the backend still owns orchestration and consistency; React/TypeScript does not solve storage/job consistency.
 
-## Known limitations and future work
+## Model and provenance
 
-One-hour input support has **not** been verified with a user-provided one-hour recording. Intel/AMD64 behavior, accuracy/WER, silence/video/additional-format behavior beyond focused checks, native subprocess interruption, and worker memory/recycling under repeated jobs are unverified. The UI has no elapsed-wait display. The English base model, VAD, and disabled previous-text conditioning do not guarantee accurate or hallucination-free output.
-
-The planned production phase adds PostgreSQL migrations, durable media, leases/retries/idempotent completion, recovery, and a transactional outbox. Authentication, cloud deployment, scaling, diarization, alignment, streaming, translation, and editing are intentionally out of scope.
+The model is `Systran/faster-whisper-base.en`, revision `3d3d5dee26484f91867d81cb899cfcf72b96be6c`, declared MIT license. It is loaded on CPU with INT8 and English settings. No reference transcript or WER calculation exists.
