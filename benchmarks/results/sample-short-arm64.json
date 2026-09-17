@@ -1,0 +1,42 @@
+{
+  "model": "Systran/faster-whisper-base.en",
+  "revision": "3d3d5dee26484f91867d81cb899cfcf72b96be6c",
+  "architecture": "aarch64",
+  "python": "3.11.13",
+  "cpu_threads": 4,
+  "compute_type": "int8",
+  "supported_compute_types": [
+    "float32",
+    "int8",
+    "int8_float32"
+  ],
+  "versions": {
+    "faster-whisper": "1.2.1",
+    "ctranslate2": "4.6.0",
+    "av": "18.1.0",
+    "huggingface-hub": "0.34.4",
+    "onnxruntime": "1.30.0",
+    "numpy": "2.4.6"
+  },
+  "download_or_cache_lookup_seconds": 43.09540349499997,
+  "load_seconds": 0.18234317200000305,
+  "runs": [
+    {
+      "index": 0,
+      "seconds": 14.816484617999947,
+      "duration_seconds": 300.0185,
+      "real_time_factor": 0.049385236637073865,
+      "characters": 4762,
+      "process_peak_rss_kib": 756072
+    },
+    {
+      "index": 1,
+      "seconds": 14.307897277000052,
+      "duration_seconds": 300.0185,
+      "real_time_factor": 0.04769005003691456,
+      "characters": 4762,
+      "process_peak_rss_kib": 829232
+    }
+  ],
+  "container_memory_peak_bytes": 940720128
+}

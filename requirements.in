@@ -1,0 +1,9 @@
+-r benchmarks/requirements.lock
+fastapi==0.116.1
+uvicorn==0.35.0
+python-multipart==0.0.22
+redis==6.4.0
+celery==5.5.3
+pydantic-settings==2.10.1
+pytest==8.4.1
+httpx==0.28.1

@@ -19,3 +19,4 @@ benchmarks/local/
 *.webm
 *.m4a
 .DS_Store
+*.flac

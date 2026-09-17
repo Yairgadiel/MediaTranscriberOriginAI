@@ -1,0 +1,23 @@
+av==18.1.0
+certifi==2026.7.22
+charset-normalizer==3.5.1
+ctranslate2==4.6.0
+faster-whisper==1.2.1
+filelock==4.0.0
+flatbuffers==25.12.19
+fsspec==2026.7.0
+hf-xet==1.6.0
+huggingface-hub==0.34.4
+idna==3.19
+numpy==2.4.6
+onnxruntime==1.30.0
+packaging==26.3
+protobuf==7.36.1
+PyYAML==6.0.3
+requests==2.34.2
+tokenizers==0.23.2
+tqdm==4.70.1
+typing_extensions==4.16.0
+urllib3==2.8.0
+ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers
+No broken requirements found.
