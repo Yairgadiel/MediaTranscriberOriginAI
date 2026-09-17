@@ -174,7 +174,7 @@ def create_app(container=None):
 
     # Docker copies the compiled React application here. API routes are registered
     # first so the catch-all static mount cannot shadow them during development.
-    app.mount('/', StaticFiles(directory='src/transcriber/entrypoints/static', html=True,
+    app.mount('/', StaticFiles(directory='backend/src/transcriber/entrypoints/static', html=True,
                                check_dir=False), name='web')
     return app
 

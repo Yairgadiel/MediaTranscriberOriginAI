@@ -3,5 +3,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certi
 WORKDIR /app
 COPY benchmarks/requirements.lock /app/requirements.lock
 RUN pip install --no-cache-dir -r requirements.lock
-COPY scripts/benchmark.py /app/benchmark.py
+COPY benchmarks/benchmark.py /app/benchmark.py
 ENTRYPOINT ["python", "-u", "/app/benchmark.py"]

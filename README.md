@@ -24,7 +24,7 @@ Start a temporary test-only Redis with persistence disabled, then run the backen
 
 ```sh
 redis-server --port 6380 --save "" --appendonly no
-TEST_REDIS_URL=redis://127.0.0.1:6380/15 .venv/bin/python -m pytest tests/test_backend.py tests/test_media.py tests/unit/test_transcription_service.py -q
+(cd backend && TEST_REDIS_URL=redis://127.0.0.1:6380/15 ../.venv/bin/python -m pytest tests/test_backend.py tests/test_media.py tests/unit/test_transcription_service.py -q)
 ```
 
 The recorded result was `17 passed` with one upstream AnyIO/Starlette TestClient deprecation warning. Stop the temporary Redis process after the test. FFmpeg is used by the media tests and must be installed and on `PATH`.
