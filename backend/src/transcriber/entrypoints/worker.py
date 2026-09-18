@@ -15,6 +15,15 @@ processor = engine = None
 ready = threading.Event()
 
 
+def wait_for_worker_ready(wait, timeout, attempts, delay, max_delay, sleep=time.sleep):
+    for attempt in range(1, attempts + 1):
+        if wait(timeout):
+            return True
+        if attempt < attempts:
+            sleep(min(delay * (2 ** (attempt - 1)), max_delay))
+    return False
+
+
 @worker_process_init.connect
 def initialize(**kwargs):
     global service
@@ -48,21 +57,13 @@ def shutdown(**kwargs):
 @celery_app.task(name='transcriber.process')
 def process(job_id: str):
     settings = service.settings
-    for attempt in range(1, settings.retry_max_attempts + 1):
-        if ready.wait(settings.model_load_timeout):
-            break
-        if attempt == settings.retry_max_attempts:
-            # It is still queued, so this conditional transition cannot affect duplicate work.
-            service.fail_unclaimed_job(job_id, 'worker_unavailable',
-                                        'The worker could not start. Please upload again.')
-            return
-        logging.getLogger(__name__).warning(
-            'job=%s event=worker_readiness attempt=%s max_attempts=%s delay_seconds=%s',
-            job_id, attempt, settings.retry_max_attempts,
-            min(settings.retry_delay_seconds * (2 ** (attempt - 1)), settings.retry_max_delay_seconds),
-        )
-        # Exponential backoff
-        time.sleep(min(settings.retry_delay_seconds * (2 ** (attempt - 1)), settings.retry_max_delay_seconds))
+    if not wait_for_worker_ready(ready.wait, settings.model_load_timeout,
+                                 settings.retry_max_attempts, settings.retry_delay_seconds,
+                                 settings.retry_max_delay_seconds):
+        # It is still queued, so this conditional transition cannot affect duplicate work.
+        service.fail_unclaimed_job(job_id, 'worker_unavailable',
+                                    'The worker could not start. Please upload again.')
+        return
     service.heartbeat.current_job = job_id
     try:
         service.transcribe_queued_job(job_id, processor, engine)

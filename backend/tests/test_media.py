@@ -1,11 +1,12 @@
 import subprocess
 import wave
+import errno
 
 import pytest
 
 from transcriber.config import Settings
 from transcriber.domain.models.job import JobError
-from transcriber.adapters.ffmpeg_processor import FFmpegMediaProcessor
+from transcriber.adapters.ffmpeg_processor import FFmpegMediaProcessor, TransientDecoderStartError
 
 
 def pcm(path, seconds):
@@ -44,3 +45,17 @@ def test_no_audio_and_decoder_timeout(tmp_path, monkeypatch):
     with pytest.raises(JobError) as exc:
         processor.normalize(source, tmp_path / 'out.wav')
     assert exc.value.code == 'decode_timeout'
+
+
+def test_decoder_launch_resource_errors_are_classified_for_bounded_retry(monkeypatch):
+    processor = FFmpegMediaProcessor(Settings())
+    monkeypatch.setattr(subprocess, 'Popen', lambda *args, **kwargs: (_ for _ in ()).throw(
+        OSError(errno.EMFILE, 'too many open files')))
+    with pytest.raises(TransientDecoderStartError):
+        processor._run(['ffmpeg'], 1)
+
+    monkeypatch.setattr(subprocess, 'Popen', lambda *args, **kwargs: (_ for _ in ()).throw(
+        OSError(errno.ENOMEM, 'out of memory')))
+    with pytest.raises(JobError) as exc:
+        processor._run(['ffmpeg'], 1)
+    assert exc.value.code == 'invalid_media'

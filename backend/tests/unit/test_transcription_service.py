@@ -8,6 +8,7 @@ from transcriber.domain.models.job import Job
 from transcriber.domain.models.job import JobError
 from transcriber.adapters.celery_dispatcher import TransientPublicationError
 from transcriber.adapters.ffmpeg_processor import TransientDecoderStartError
+from transcriber.entrypoints.worker import wait_for_worker_ready
 
 
 class FakeRepository:
@@ -237,6 +238,19 @@ class TranscriptionServiceTest(unittest.TestCase):
         self.assertEqual(self.repository.get(job.id).status, 'processing')
         self.assertIn(job.id, self.storage.files)
         self.assertIn(job.id, self.admission.reserved)
+
+    def test_worker_readiness_succeeds_on_second_attempt_with_backoff(self):
+        waits, sleeps = iter([False, True]), []
+        self.assertTrue(wait_for_worker_ready(lambda timeout: next(waits), 10, 3, 1, 5, sleeps.append))
+        self.assertEqual(sleeps, [1])
+
+    def test_worker_readiness_stops_after_exactly_three_attempts(self):
+        calls, sleeps = [], []
+        result = wait_for_worker_ready(lambda timeout: calls.append(timeout) or False,
+                                       10, 3, 1, 5, sleeps.append)
+        self.assertFalse(result)
+        self.assertEqual(calls, [10, 10, 10])
+        self.assertEqual(sleeps, [1, 2])
 
     def test_exhausted_transient_decoder_failure_fails_and_releases_once(self):
         job = self.submit()
