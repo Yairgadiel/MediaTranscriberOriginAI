@@ -46,9 +46,24 @@ describe('transcription UI', () => {
     render(<App />)
     await flush()
     expect(screen.getByRole('alert').textContent).toContain('Request failed (503)')
-    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
     expect(screen.getByText('Status: queued')).toBeTruthy()
     expect(window.localStorage.getItem('media-transcriber.active-job')).toBe('a'.repeat(32))
+  })
+
+  it('stops polling after three transient failures and gives a clear next step', async () => {
+    window.localStorage.setItem('media-transcriber.active-job', 'a'.repeat(32))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 503 })))
+    render(<App />)
+    await flush()
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    expect(fetch).toHaveBeenCalledTimes(3)
+    expect(screen.getByRole('alert').textContent).toContain('after three attempts')
+    expect(window.localStorage.getItem('media-transcriber.active-job')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Upload and transcribe' })).toBeTruthy()
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
+    expect(fetch).toHaveBeenCalledTimes(3)
   })
 
   it('forgets an expired restored job after one polling 404', async () => {

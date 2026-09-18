@@ -8,6 +8,9 @@ from transcriber.domain.contracts import (
     TranscriptionEngine, WorkerHeartbeat,
 )
 from transcriber.domain.repositories.job_repository import JobRepository
+from transcriber.adapters.celery_dispatcher import TransientPublicationError
+from transcriber.adapters.ffmpeg_processor import TransientDecoderStartError
+from transcriber.services.retry_policy import retry_transient
 
 if TYPE_CHECKING:
     from transcriber.config import Settings
@@ -52,13 +55,25 @@ class TranscriptionService:
         except Exception:
             log.warning('job=%s event=cleanup_deferred', job_id)
 
+    def fail_unclaimed_job(self, job_id: str, code: str, message: str) -> None:
+        """Fail and clean only a still-queued job; a duplicate may already own it."""
+        try:
+            if self.repository.fail(job_id, code, message, 'queued'):
+                self.cleanup_job_resources(job_id)
+        except Exception:
+            log.warning('job=%s event=cleanup_deferred', job_id)
+
     def store_and_enqueue(self, job_id: str, source: BinaryIO) -> Job:
         self.storage.save(job_id, source, self.settings.max_upload_bytes)
         if not self.admission.renew(job_id, self.settings.queue_timeout + self.settings.cleanup_grace):
             raise JobError('upload_expired', 'The upload expired. Please upload again.')
         job = Job.new(job_id)
         self.repository.create(job)
-        self.dispatcher.dispatch(job_id)
+        retry_transient(
+            lambda: self.dispatcher.dispatch(job_id), retryable=lambda exc: isinstance(exc, TransientPublicationError),
+            job_id=job_id, event='task_publication', max_attempts=self.settings.retry_max_attempts,
+            delay=self.settings.retry_delay_seconds, max_delay=self.settings.retry_max_delay_seconds,
+        )
         return job
 
     def find_job(self, job_id: str) -> Job | None:
@@ -72,7 +87,14 @@ class TranscriptionService:
             if not self.admission.renew(job_id, self.settings.processing_timeout + self.settings.cleanup_grace):
                 raise JobError('reservation_lost', 'Processing was interrupted. Please upload again.')
             self.repository.stage(job_id, 'decoding')
-            duration = processor.normalize(self.storage.input_path(job_id), self.storage.audio_path(job_id))
+            # Only launch/resource failures retry, and never more than once. Validation,
+            # decoding timeouts, and all inference failures stay terminal on first failure.
+            duration = retry_transient(
+                lambda: processor.normalize(self.storage.input_path(job_id), self.storage.audio_path(job_id)),
+                retryable=lambda exc: isinstance(exc, TransientDecoderStartError), job_id=job_id,
+                event='decoder_start', max_attempts=min(2, self.settings.retry_max_attempts),
+                delay=self.settings.retry_delay_seconds, max_delay=self.settings.retry_max_delay_seconds,
+            )
             self.repository.stage(job_id, 'transcribing')
             text = engine.transcribe(self.storage.audio_path(job_id))
             self.repository.complete(job_id, text, duration)

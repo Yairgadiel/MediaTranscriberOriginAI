@@ -3,6 +3,12 @@ import { ApiError, getJob, submit, type TranscriptionJob } from './api'
 
 const storageKey = 'media-transcriber.active-job'
 const terminal = (job: TranscriptionJob) => job.status === 'completed' || job.status === 'failed'
+const pollingRetryDelayMs = 2_000
+const pollingRetryMaxDelayMs = 5_000
+
+const retryDelay = (attempt: number) => Math.min(
+  pollingRetryDelayMs * (2 ** (attempt - 1)), pollingRetryMaxDelayMs,
+)
 
 export function useTranscription() {
   const [job, setJob] = useState<TranscriptionJob | null>(null)
@@ -10,6 +16,7 @@ export function useTranscription() {
   const [uploading, setUploading] = useState(false)
   const pollTimer = useRef<number | null>(null)
   const request = useRef<AbortController | null>(null)
+  const pollFailures = useRef(0)
 
   const stop = useCallback(() => {
     if (pollTimer.current !== null) window.clearTimeout(pollTimer.current)
@@ -28,6 +35,7 @@ export function useTranscription() {
       const next = await getJob(jobId, controller.signal)
       setJob(next)
       setError(null)
+      pollFailures.current = 0
       if (terminal(next)) window.localStorage.removeItem(storageKey)
     } catch (cause) {
       if ((cause as Error).name !== 'AbortError') {
@@ -38,8 +46,16 @@ export function useTranscription() {
           setError(cause.message)
           return
         }
+        pollFailures.current += 1
+        if (pollFailures.current >= 3) {
+          stop()
+          window.localStorage.removeItem(storageKey)
+          setJob(null)
+          setError('We could not refresh the transcription status after three attempts. Please start a new upload or refresh the page.')
+          return
+        }
         setError((cause as Error).message || 'Unable to refresh status. Retrying shortly.')
-        pollTimer.current = window.setTimeout(() => void refresh(jobId), 5000)
+        pollTimer.current = window.setTimeout(() => void refresh(jobId), retryDelay(pollFailures.current))
       }
     }
   }, [stop])
@@ -61,6 +77,7 @@ export function useTranscription() {
 
   const upload = useCallback(async (file: File) => {
     stop()
+    pollFailures.current = 0
     setUploading(true)
     setError(null)
     try {
@@ -76,6 +93,7 @@ export function useTranscription() {
 
   const reset = useCallback(() => {
     stop()
+    pollFailures.current = 0
     window.localStorage.removeItem(storageKey)
     setJob(null)
     setError(null)

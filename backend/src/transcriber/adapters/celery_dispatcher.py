@@ -1,4 +1,5 @@
 from celery import Celery
+from kombu.exceptions import OperationalError
 from transcriber.config import Settings
 from transcriber.domain.contracts import TaskDispatcher
 s = Settings()
@@ -15,4 +16,12 @@ celery_app.conf.update(task_ignore_result=True, result_backend=None, task_serial
 
 class CeleryTaskDispatcher(TaskDispatcher):
     def dispatch(self, job_id: str) -> None:
-        celery_app.send_task('transcriber.process', args=[job_id], task_id=job_id)
+        try:
+            celery_app.send_task('transcriber.process', args=[job_id], task_id=job_id)
+        except OperationalError as exc:
+            # The service retries only broker-connectivity/publication failures.
+            raise TransientPublicationError() from exc
+
+
+class TransientPublicationError(RuntimeError):
+    """A broker result is unknown, so publication compensation remains conservative."""

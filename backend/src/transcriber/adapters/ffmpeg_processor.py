@@ -16,6 +16,10 @@ SUPPORTED_MEDIA_MIME_TYPES = frozenset({
     'video/mp4', 'video/webm', 'video/x-matroska',
 })
 
+
+class TransientDecoderStartError(RuntimeError):
+    """A decoder could not be launched because a temporary OS resource was unavailable."""
+
 class FFmpegMediaProcessor(MediaProcessor):
     def __init__(self, settings):
         self.settings = settings
@@ -24,9 +28,18 @@ class FFmpegMediaProcessor(MediaProcessor):
         # A fresh launcher sets Linux parent-death protection before exec.
         command = [sys.executable, '-m', 'transcriber.adapters.process_launcher', str(os.getpid()), *args]
         # Probe selects one stream; launcher also caps stdout file size at 64 KiB.
-        with tempfile.TemporaryFile() as output, subprocess.Popen(
-            command, stdout=output, stderr=subprocess.DEVNULL, start_new_session=True
-        ) as process:
+        try:
+            output = tempfile.TemporaryFile()
+            process = subprocess.Popen(command, stdout=output, stderr=subprocess.DEVNULL,
+                                       start_new_session=True)
+        except OSError as exc:
+            if 'output' in locals():
+                output.close()
+            # ENOMEM is not retried: it is an out-of-memory condition, not a brief launch race.
+            if exc.errno in (11, 23, 24):  # EAGAIN, ENFILE, EMFILE
+                raise TransientDecoderStartError() from exc
+            raise JobError('invalid_media', 'The media could not be decoded. Use a supported audio or video file.') from exc
+        with output, process:
             try:
                 process.wait(timeout=timeout)
             except BaseException:

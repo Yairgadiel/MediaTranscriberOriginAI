@@ -26,7 +26,10 @@ frontend/
 The browser sends one multipart request to `POST /api/transcriptions`, stores the active job ID
 in `localStorage`, and polls `GET /api/transcriptions/{id}` until the job completes or fails.
 The frontend renders filenames and transcript content as text and has no direct access to Redis,
-Celery, temporary files, or model internals.
+Celery, temporary files, or model internals. Transient polling errors use a 2-second exponential
+delay capped at 5 seconds and retry at most three times; after the third failure, polling stops,
+the stored ID is cleared, and the UI tells the user to
+start a new upload or refresh. A `404` remains an immediate terminal expired/restarted-job case.
 
 From this directory:
 

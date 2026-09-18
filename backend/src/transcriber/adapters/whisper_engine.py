@@ -1,6 +1,18 @@
 from transcriber.domain.contracts import TranscriptionEngine
 
 
+class TransientModelReadinessError(RuntimeError):
+    """A model download/readiness dependency had a retryable transport failure."""
+
+
+def is_transient_model_error(exc: Exception) -> bool:
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    response = getattr(exc, 'response', None)
+    status = getattr(response, 'status_code', None)
+    return status == 429 or (isinstance(status, int) and status >= 500)
+
+
 class FasterWhisperEngine(TranscriptionEngine):
     def __init__(self, settings):
         # ML imports happen only when constructing the worker adapter.

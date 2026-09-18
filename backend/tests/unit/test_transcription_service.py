@@ -1,9 +1,13 @@
 import io
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 from transcriber.services.transcription_service import TranscriptionService
 from transcriber.domain.models.job import Job
+from transcriber.domain.models.job import JobError
+from transcriber.adapters.celery_dispatcher import TransientPublicationError
+from transcriber.adapters.ffmpeg_processor import TransientDecoderStartError
 
 
 class FakeRepository:
@@ -59,6 +63,12 @@ class FakeStorage:
     def free_bytes(self):
         return 10**12
 
+    def input_path(self, job_id):
+        return Path('/input') / job_id
+
+    def audio_path(self, job_id):
+        return Path('/audio') / job_id
+
     def old_directories(self, before):
         return []
 
@@ -93,7 +103,8 @@ class TranscriptionServiceTest(unittest.TestCase):
             self.repository, self.storage, self.dispatcher, self.admission,
             SimpleNamespace(ready=lambda: True, job_alive=lambda job_id: False),
             SimpleNamespace(max_upload_bytes=1024, queue_timeout=10, cleanup_grace=1,
-                            processing_timeout=10, upload_timeout=10),
+                            processing_timeout=10, upload_timeout=10, retry_max_attempts=3,
+                            retry_delay_seconds=0, retry_max_delay_seconds=0),
         )
 
     def submit(self, job_id='job'):
@@ -165,6 +176,97 @@ class TranscriptionServiceTest(unittest.TestCase):
             SimpleNamespace(transcribe=lambda audio: calls.append(audio)),
         )
         self.assertEqual(calls, [])
+
+    def test_transient_publication_succeeds_on_third_attempt(self):
+        attempts = []
+        def dispatch(job_id):
+            attempts.append(job_id)
+            if len(attempts) < 3:
+                raise TransientPublicationError()
+        self.dispatcher.dispatch = dispatch
+        self.service.reserve_upload_capacity('job')
+
+        self.service.store_and_enqueue('job', io.BytesIO(b'audio'))
+
+        self.assertEqual(attempts, ['job', 'job', 'job'])
+        self.assertEqual(self.repository.get('job').status, 'queued')
+
+    def test_exhausted_publication_failure_is_visible_and_releases_resources(self):
+        attempts = []
+        def dispatch(job_id):
+            attempts.append(job_id)
+            raise TransientPublicationError()
+        self.dispatcher.dispatch = dispatch
+        self.service.reserve_upload_capacity('job')
+
+        with self.assertRaises(TransientPublicationError):
+            self.service.store_and_enqueue('job', io.BytesIO(b'audio'))
+        self.service.compensate_failed_submission('job')
+
+        self.assertEqual(attempts, ['job', 'job', 'job'])
+        self.assertEqual(self.repository.get('job').status, 'failed')
+        self.assertEqual(self.repository.get('job').error['code'], 'submission_failed')
+        self.assertEqual(self.storage.deleted, ['job'])
+        self.assertEqual(self.admission.released, ['job'])
+
+    def test_ambiguous_publication_preserves_claimed_visible_work(self):
+        attempts = []
+        def dispatch(job_id):
+            attempts.append(job_id)
+            if len(attempts) == 1:
+                self.repository.claim(job_id)  # Broker may have accepted before its error.
+            raise TransientPublicationError()
+        self.dispatcher.dispatch = dispatch
+        self.service.reserve_upload_capacity('job')
+
+        with self.assertRaises(TransientPublicationError):
+            self.service.store_and_enqueue('job', io.BytesIO(b'audio'))
+        self.service.compensate_failed_submission('job')
+
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual(self.repository.get('job').status, 'processing')
+        self.assertIn('job', self.storage.files)
+        self.assertIn('job', self.admission.reserved)
+
+    def test_readiness_exhaustion_cannot_override_a_duplicate_claim(self):
+        job = self.submit()
+        self.repository.claim(job.id)
+
+        self.service.fail_unclaimed_job(job.id, 'worker_unavailable', 'safe message')
+
+        self.assertEqual(self.repository.get(job.id).status, 'processing')
+        self.assertIn(job.id, self.storage.files)
+        self.assertIn(job.id, self.admission.reserved)
+
+    def test_exhausted_transient_decoder_failure_fails_and_releases_once(self):
+        job = self.submit()
+        attempts = []
+        def normalize(source, destination):
+            attempts.append(source)
+            raise TransientDecoderStartError()
+
+        self.service.transcribe_queued_job(job.id, SimpleNamespace(normalize=normalize),
+                                           SimpleNamespace(transcribe=lambda audio: 'never'))
+
+        result = self.repository.get(job.id)
+        self.assertEqual(len(attempts), 2)  # Decoder start gets only one retry.
+        self.assertEqual(result.status, 'failed')
+        self.assertEqual(result.error['code'], 'processing_failed')
+        self.assertEqual(self.storage.deleted, [job.id])
+        self.assertEqual(self.admission.released, [job.id])
+
+    def test_deterministic_media_failure_is_not_retried(self):
+        job = self.submit()
+        attempts = []
+        def normalize(source, destination):
+            attempts.append(source)
+            raise JobError('invalid_media', 'The media could not be decoded.')
+
+        self.service.transcribe_queued_job(job.id, SimpleNamespace(normalize=normalize),
+                                           SimpleNamespace(transcribe=lambda audio: 'never'))
+
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(self.repository.get(job.id).error['code'], 'invalid_media')
 
 
 if __name__ == '__main__':

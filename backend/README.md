@@ -21,6 +21,7 @@ backend/
 │       │   ├── contracts.py         # explicit storage, engine, dispatcher, and Redis-client interfaces
 │       │   └── repositories/job_repository.py # JobRepository interface
 │       ├── services/
+│       │   ├── retry_policy.py           # bounded exponential retry helper
 │       │   └── transcription_service.py  # named submission, retrieval, processing, cleanup use cases
 │       ├── adapters/
 │       │   ├── celery_dispatcher.py      # Celery task publication
@@ -58,6 +59,13 @@ replace those injected contracts without changing the transcription service.
 `entrypoints/worker.py` is intentionally small: it is the Celery process entrypoint. It creates
 the worker service after forking, loads FFmpeg/faster-whisper outside the API process, reports
 model readiness, and passes each opaque job ID to `transcribe_queued_job`.
+
+Retry behavior is deliberately narrow: broker publication and model-cache/readiness transport
+failures may make at most three exponentially backed-off attempts, while decoder process-start
+resource failures get one retry. Invalid media, decode timeouts, out-of-memory or deterministic
+runtime failures, and anything after transcription starts fail immediately. Conditional Redis
+state transitions keep ambiguous publication and duplicate delivery from deleting or processing
+an already-claimed job.
 
 From the repository root, run the focused backend tests with:
 
